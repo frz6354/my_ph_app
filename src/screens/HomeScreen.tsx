@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -65,6 +65,8 @@ export default function HomeScreen({ navigation }: Props) {
   const [modalVisible, setModalVisible] = useState(false);
   const [loadingSearch, setLoadingSearch] = useState(false);
 
+  const hourlyScrollRef = useRef<ScrollView>(null);
+
   const loadData = async () => {
     const cities = await getCityList();
     const codes = await getZipCodes();
@@ -128,6 +130,19 @@ export default function HomeScreen({ navigation }: Props) {
     });
     return () => subscription.remove();
   }, []);
+
+  useEffect(() => {
+    if (viewMode === 'detail' && activeWeather) {
+      const currentHour = new Date().getHours();
+      const itemWidth = 74;
+      setTimeout(() => {
+        hourlyScrollRef.current?.scrollTo({
+          x: currentHour * itemWidth,
+          animated: true,
+        });
+      }, 100);
+    }
+  }, [viewMode, selectedCity, activeWeather]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -216,15 +231,10 @@ export default function HomeScreen({ navigation }: Props) {
   };
 
   return (
-    <View style={styles.outerContainer}>
-      <StatusBar translucent backgroundColor="transparent" barStyle="light-content" />
-
+    <View style={[styles.outerContainer, { paddingTop: insets.top }]}>
       <ScrollView
         style={styles.container}
-        contentContainerStyle={[
-          styles.content,
-          { paddingTop: Math.max(insets.top + 10, Platform.OS === 'android' ? (StatusBar.currentHeight || 24) + 10 : 20) },
-        ]}
+        contentContainerStyle={styles.content}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#fff" />
         }
@@ -405,6 +415,17 @@ export default function HomeScreen({ navigation }: Props) {
                       {Math.round(activeWeather.forecast.forecastday[0].day.mintemp_c)}°
                     </Text>
                   )}
+
+                  {activeWeather.forecast?.forecastday?.[0]?.astro && (
+                    <View style={styles.heroAstroRow}>
+                      <Text style={styles.heroAstroText}>
+                        <Ionicons name="sunny-outline" size={13} color="#ffce00" /> {activeWeather.forecast.forecastday[0].astro.sunrise}
+                      </Text>
+                      <Text style={styles.heroAstroText}>
+                        <Ionicons name="moon-outline" size={13} color="#f1c40f" /> {activeWeather.forecast.forecastday[0].astro.sunset}
+                      </Text>
+                    </View>
+                  )}
                 </View>
 
                 {activeWeather.current.condition.icon && (
@@ -423,7 +444,21 @@ export default function HomeScreen({ navigation }: Props) {
                     <Text style={styles.cardHeaderTitle}>HOURLY FORECAST</Text>
                   </View>
 
-                  <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.hourlyScroll}>
+                  <ScrollView
+                    ref={hourlyScrollRef}
+                    horizontal
+                    showsHorizontalScrollIndicator={false}
+                    style={styles.hourlyScroll}
+                    onLayout={() => {
+                      const currentHour = new Date().getHours();
+                      // Each hourly item has minWidth 58 + marginRight 16 + paddingHorizontal (total ~74px width)
+                      const itemWidth = 74;
+                      hourlyScrollRef.current?.scrollTo({
+                        x: currentHour * itemWidth,
+                        animated: true,
+                      });
+                    }}
+                  >
                     {activeWeather.forecast.forecastday[0].hour.map((h: HourlyWeather, idx: number) => {
                       const timePart = h.time.split(' ')[1] || h.time;
                       const [hourStr] = timePart.split(':');
@@ -737,7 +772,7 @@ const styles = StyleSheet.create({
   },
   content: {
     paddingHorizontal: 16,
-    paddingTop: Platform.OS === 'android' ? 50 : 60,
+    paddingTop: 16,
     paddingBottom: 40,
   },
   header: {
@@ -945,6 +980,17 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: 'rgba(255, 255, 255, 0.6)',
     marginTop: 4,
+  },
+  heroAstroRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginTop: 6,
+  },
+  heroAstroText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: 'rgba(255, 255, 255, 0.9)',
   },
   heroIcon: {
     width: 90,
