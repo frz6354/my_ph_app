@@ -18,6 +18,7 @@ import { getAlarmSettings } from '../services/alarmApi';
 
 const ZIP_CODES_KEY = '@weather_zip_codes';
 const DEFAULT_ZIP_KEY = '@weather_default_zip';
+const CITY_LIST_KEY = '@weather_city_list';
 const WEATHER_DATA_MAP_KEY = '@weather_data_map';
 const LAST_ALARMS_DATE_KEY = '@weather_last_alarms_date';
 const LAST_SYSTEM_ALARM_TIMES_KEY = '@weather_last_system_alarm_times';
@@ -33,11 +34,36 @@ export async function getZipCodes(): Promise<string[]> {
   }
 }
 
+export async function getCityList(): Promise<string[]> {
+  const raw = await AsyncStorage.getItem(CITY_LIST_KEY);
+  if (raw) {
+    try {
+      return JSON.parse(raw) as string[];
+    } catch {
+      // fallback
+    }
+  }
+  const defaultCities = ['Prague', 'London', 'Tokyo', 'New York'];
+  const zips = await getZipCodes();
+  const initial = Array.from(new Set([...defaultCities, ...zips]));
+  await saveCityList(initial);
+  return initial;
+}
+
+export async function saveCityList(cities: string[]): Promise<void> {
+  await AsyncStorage.setItem(CITY_LIST_KEY, JSON.stringify(cities));
+}
+
 export async function addZipCode(zip: string): Promise<void> {
   const codes = await getZipCodes();
   if (!codes.includes(zip)) {
     codes.push(zip);
     await AsyncStorage.setItem(ZIP_CODES_KEY, JSON.stringify(codes));
+  }
+  const cityList = await getCityList();
+  if (!cityList.includes(zip)) {
+    cityList.push(zip);
+    await saveCityList(cityList);
   }
 }
 
@@ -45,11 +71,16 @@ export async function removeZipCode(zip: string): Promise<void> {
   let codes = await getZipCodes();
   codes = codes.filter(c => c !== zip);
   await AsyncStorage.setItem(ZIP_CODES_KEY, JSON.stringify(codes));
+
+  let cityList = await getCityList();
+  cityList = cityList.filter(c => c !== zip && c.toLowerCase() !== zip.toLowerCase());
+  await saveCityList(cityList);
+
   // if removing default zip code, set a new default or null
   const defaultZip = await getDefaultZipCode();
   if (defaultZip === zip) {
-    if (codes.length > 0) {
-      await setDefaultZipCode(codes[0]);
+    if (cityList.length > 0) {
+      await setDefaultZipCode(cityList[0]);
     } else {
       await AsyncStorage.removeItem(DEFAULT_ZIP_KEY);
     }
