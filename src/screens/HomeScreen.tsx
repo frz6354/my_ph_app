@@ -14,10 +14,14 @@ import {
   Alert,
   TextInput,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as Clipboard from 'expo-clipboard';
 import {
   getZipCodes,
+  getCityList,
+  saveCityList,
+  removeZipCode,
   getDefaultZipCode,
   getWeatherMap,
   runWeatherCheck,
@@ -45,6 +49,8 @@ interface Props {
 const DEFAULT_CITIES = ['Prague', 'London', 'Tokyo', 'New York'];
 
 export default function HomeScreen({ navigation }: Props) {
+  const insets = useSafeAreaInsets();
+  const [cityList, setCityList] = useState<string[]>([]);
   const [zipCodes, setZipCodes] = useState<string[]>([]);
   const [defaultZip, setDefaultZip] = useState<string | null>(null);
   const [weatherMap, setWeatherMap] = useState<Record<string, WeatherResponse>>({});
@@ -60,30 +66,59 @@ export default function HomeScreen({ navigation }: Props) {
   const [loadingSearch, setLoadingSearch] = useState(false);
 
   const loadData = async () => {
+    const cities = await getCityList();
     const codes = await getZipCodes();
     const defZip = await getDefaultZipCode();
     let wMap = await getWeatherMap();
 
-    // Ensure default demo cities exist in map for rich multi-city overview
-    const citiesToLoad = Array.from(new Set([...DEFAULT_CITIES, ...codes, ...(defZip ? [defZip] : [])]));
-
-    for (const city of citiesToLoad) {
+    for (const city of cities) {
       if (!wMap[city]) {
         try {
           const w = await fetchWeather(city);
           wMap = { ...wMap, [city]: w };
         } catch (e) {
-          console.warn(`Could not load weather for default city ${city}`, e);
+          console.warn(`Could not load weather for city ${city}`, e);
         }
       }
     }
 
+    setCityList(cities);
     setZipCodes(codes);
     setDefaultZip(defZip);
     setWeatherMap(wMap);
     if (Object.keys(wMap).length > 0) {
       setLastUpdated(new Date().toLocaleTimeString());
     }
+  };
+
+  const handleMoveCity = async (index: number, direction: 'up' | 'down') => {
+    const targetIndex = direction === 'up' ? index - 1 : index + 1;
+    if (targetIndex < 0 || targetIndex >= cityList.length) return;
+    const updated = [...cityList];
+    const [moved] = updated.splice(index, 1);
+    updated.splice(targetIndex, 0, moved);
+    setCityList(updated);
+    await saveCityList(updated);
+    DeviceEventEmitter.emit('zip_changed');
+  };
+
+  const handleDeleteCity = (cityKey: string) => {
+    Alert.alert(
+      'Delete City',
+      `Are you sure you want to remove ${cityKey}?`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            await removeZipCode(cityKey);
+            await loadData();
+            DeviceEventEmitter.emit('zip_changed');
+          },
+        },
+      ]
+    );
   };
 
   useEffect(() => {
@@ -159,9 +194,26 @@ export default function HomeScreen({ navigation }: Props) {
     return { level: 'Extreme', advice: 'Take full precautions. Avoid outdoor sun.' };
   };
 
-  const allCityKeys = Array.from(
-    new Set([...DEFAULT_CITIES, ...zipCodes, ...Object.keys(weatherMap)])
-  );
+  // AQI US EPA category helper
+  const getAqiCategory = (epaIndex?: number) => {
+    if (!epaIndex) return { status: 'Good (N/A)', desc: 'Air quality is satisfactory.' };
+    switch (epaIndex) {
+      case 1:
+        return { status: '1 - Good', desc: 'Air quality is satisfactory, poses little/no risk.' };
+      case 2:
+        return { status: '2 - Moderate', desc: 'Air quality is acceptable for most people.' };
+      case 3:
+        return { status: '3 - Unhealthy for Sensitive Groups', desc: 'Sensitive individuals may experience health effects.' };
+      case 4:
+        return { status: '4 - Unhealthy', desc: 'Everyone may begin to experience health effects.' };
+      case 5:
+        return { status: '5 - Very Unhealthy', desc: 'Health alert: risk of health effects for everyone.' };
+      case 6:
+        return { status: '6 - Hazardous', desc: 'Health warning of emergency conditions.' };
+      default:
+        return { status: `${epaIndex}`, desc: 'Air quality data available.' };
+    }
+  };
 
   return (
     <View style={styles.outerContainer}>
@@ -169,7 +221,10 @@ export default function HomeScreen({ navigation }: Props) {
 
       <ScrollView
         style={styles.container}
-        contentContainerStyle={styles.content}
+        contentContainerStyle={[
+          styles.content,
+          { paddingTop: Math.max(insets.top + 10, Platform.OS === 'android' ? (StatusBar.currentHeight || 24) + 10 : 20) },
+        ]}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#fff" />
         }
@@ -227,13 +282,13 @@ export default function HomeScreen({ navigation }: Props) {
           <View style={styles.gridSection}>
             <Text style={styles.sectionHeaderTitle}>Weather Locations</Text>
             <View style={styles.cityGrid}>
-              {allCityKeys.map((cityKey: string) => {
+              {cityList.map((cityKey: string, index: number) => {
                 const w = weatherMap[cityKey];
                 const isSelected = activeCityKey === cityKey;
 
                 return (
                   <TouchableOpacity
-                    key={cityKey}
+                    key={`${cityKey}-${index}`}
                     style={[styles.cityCard, isSelected && styles.cityCardSelected]}
                     onPress={() => {
                       setSelectedCity(cityKey);
@@ -250,12 +305,39 @@ export default function HomeScreen({ navigation }: Props) {
                           {w?.location?.country || 'Location'}
                         </Text>
                       </View>
-                      {w?.current?.condition?.icon && (
-                        <Image
-                          source={{ uri: `https:${w.current.condition.icon}` }}
-                          style={styles.gridIcon}
-                        />
-                      )}
+                      <View style={styles.cardActionRow}>
+                        {index > 0 && (
+                          <TouchableOpacity
+                            onPress={(e) => {
+                              e.stopPropagation();
+                              handleMoveCity(index, 'up');
+                            }}
+                            style={styles.actionBtnIcon}
+                          >
+                            <Ionicons name="arrow-back" size={14} color="rgba(255,255,255,0.8)" />
+                          </TouchableOpacity>
+                        )}
+                        {index < cityList.length - 1 && (
+                          <TouchableOpacity
+                            onPress={(e) => {
+                              e.stopPropagation();
+                              handleMoveCity(index, 'down');
+                            }}
+                            style={styles.actionBtnIcon}
+                          >
+                            <Ionicons name="arrow-forward" size={14} color="rgba(255,255,255,0.8)" />
+                          </TouchableOpacity>
+                        )}
+                        <TouchableOpacity
+                          onPress={(e) => {
+                            e.stopPropagation();
+                            handleDeleteCity(cityKey);
+                          }}
+                          style={styles.deleteBtnIcon}
+                        >
+                          <Ionicons name="trash-outline" size={14} color="#ff6b6b" />
+                        </TouchableOpacity>
+                      </View>
                     </View>
 
                     <View style={styles.cardBottomRow}>
@@ -268,7 +350,12 @@ export default function HomeScreen({ navigation }: Props) {
                         </Text>
                       </View>
 
-                      {w?.forecast?.forecastday?.[0]?.day && (
+                      {w?.current?.condition?.icon ? (
+                        <Image
+                          source={{ uri: `https:${w.current.condition.icon}` }}
+                          style={styles.gridIcon}
+                        />
+                      ) : w?.forecast?.forecastday?.[0]?.day ? (
                         <View style={styles.rangeContainer}>
                           <Text style={styles.rangeText}>
                             H: {Math.round(w.forecast.forecastday[0].day.maxtemp_c)}°
@@ -277,7 +364,7 @@ export default function HomeScreen({ navigation }: Props) {
                             L: {Math.round(w.forecast.forecastday[0].day.mintemp_c)}°
                           </Text>
                         </View>
-                      )}
+                      ) : null}
                     </View>
                   </TouchableOpacity>
                 );
@@ -341,18 +428,35 @@ export default function HomeScreen({ navigation }: Props) {
                       const timePart = h.time.split(' ')[1] || h.time;
                       const [hourStr] = timePart.split(':');
                       const hourInt = parseInt(hourStr, 10);
-                      const displayHour = hourInt === new Date().getHours() ? 'Now' : `${(hourInt % 12) || 12} ${hourInt >= 12 ? 'PM' : 'AM'}`;
+                      const currentLocalHour = new Date().getHours();
+                      const isCurrentHour = hourInt === currentLocalHour;
+                      const displayHour = isCurrentHour ? 'Now' : `${(hourInt % 12) || 12} ${hourInt >= 12 ? 'PM' : 'AM'}`;
 
                       return (
-                        <View key={idx} style={styles.hourlyItem}>
-                          <Text style={styles.hourlyTime}>{displayHour}</Text>
+                        <View
+                          key={idx}
+                          style={[
+                            styles.hourlyItem,
+                            isCurrentHour && styles.hourlyItemCurrent,
+                          ]}
+                        >
+                          <Text style={[styles.hourlyTime, isCurrentHour && styles.hourlyTimeCurrent]}>
+                            {displayHour}
+                          </Text>
                           {h.condition.icon && (
                             <Image
                               source={{ uri: `https:${h.condition.icon}` }}
                               style={styles.hourlyIconImage}
                             />
                           )}
-                          <Text style={styles.hourlyTemp}>{Math.round(h.temp_c)}°</Text>
+                          <Text style={[styles.hourlyTemp, isCurrentHour && styles.hourlyTempCurrent]}>
+                            {Math.round(h.temp_c)}°
+                          </Text>
+                          {isCurrentHour && (
+                            <View style={styles.nowBadge}>
+                              <Text style={styles.nowBadgeText}>LIVE</Text>
+                            </View>
+                          )}
                         </View>
                       );
                     })}
@@ -396,6 +500,68 @@ export default function HomeScreen({ navigation }: Props) {
                   </View>
                 </View>
               )}
+
+              {/* Sunrise & Sunset Spotlight Card */}
+              <View style={styles.glassCard}>
+                <View style={styles.cardHeader}>
+                  <Ionicons name="sunny-outline" size={18} color="rgba(255,255,255,0.7)" style={{ marginRight: 6 }} />
+                  <Text style={styles.cardHeaderTitle}>SUN & MOON</Text>
+                </View>
+                <View style={styles.sunRow}>
+                  <View style={styles.sunBox}>
+                    <Ionicons name="sunny-outline" size={28} color="#ffce00" />
+                    <Text style={styles.sunLabel}>Sunrise</Text>
+                    <Text style={styles.sunTime}>
+                      {activeWeather.forecast?.forecastday?.[0]?.astro?.sunrise || '6:00 AM'}
+                    </Text>
+                  </View>
+                  <View style={styles.sunDivider} />
+                  <View style={styles.sunBox}>
+                    <Ionicons name="moon-outline" size={28} color="#f1c40f" />
+                    <Text style={styles.sunLabel}>Sunset</Text>
+                    <Text style={styles.sunTime}>
+                      {activeWeather.forecast?.forecastday?.[0]?.astro?.sunset || '8:00 PM'}
+                    </Text>
+                  </View>
+                </View>
+              </View>
+
+              {/* Air Quality (AQI) Card */}
+              <View style={styles.glassCard}>
+                <View style={styles.cardHeader}>
+                  <Ionicons name="leaf-outline" size={18} color="rgba(255,255,255,0.7)" style={{ marginRight: 6 }} />
+                  <Text style={styles.cardHeaderTitle}>AIR QUALITY (AQI)</Text>
+                </View>
+                <Text style={styles.aqiStatus}>
+                  {getAqiCategory(activeWeather.current.air_quality?.['us-epa-index']).status}
+                </Text>
+                <Text style={styles.aqiDesc}>
+                  {getAqiCategory(activeWeather.current.air_quality?.['us-epa-index']).desc}
+                </Text>
+
+                {activeWeather.current.air_quality && (
+                  <View style={styles.aqiPollutantsRow}>
+                    <View style={styles.pollutantBadge}>
+                      <Text style={styles.pollutantLabel}>PM2.5</Text>
+                      <Text style={styles.pollutantValue}>
+                        {Math.round(activeWeather.current.air_quality.pm2_5 || 0)} µg/m³
+                      </Text>
+                    </View>
+                    <View style={styles.pollutantBadge}>
+                      <Text style={styles.pollutantLabel}>PM10</Text>
+                      <Text style={styles.pollutantValue}>
+                        {Math.round(activeWeather.current.air_quality.pm10 || 0)} µg/m³
+                      </Text>
+                    </View>
+                    <View style={styles.pollutantBadge}>
+                      <Text style={styles.pollutantLabel}>O₃</Text>
+                      <Text style={styles.pollutantValue}>
+                        {Math.round(activeWeather.current.air_quality.o3 || 0)} µg/m³
+                      </Text>
+                    </View>
+                  </View>
+                )}
+              </View>
 
               {/* 2x3 Weather Metrics Grid */}
               <View style={styles.metricsGrid}>
@@ -469,21 +635,20 @@ export default function HomeScreen({ navigation }: Props) {
                   </Text>
                 </View>
 
-                {/* 6. SUNRISE & SUNSET */}
+                {/* 6. FEELS LIKE */}
                 <View style={styles.metricCard}>
                   <View style={styles.metricCardHeader}>
-                    <Ionicons name="time-outline" size={16} color="rgba(255,255,255,0.7)" style={{ marginRight: 6 }} />
-                    <Text style={styles.metricCardTitle}>SUNRISE</Text>
+                    <Ionicons name="thermometer-outline" size={16} color="rgba(255,255,255,0.7)" style={{ marginRight: 6 }} />
+                    <Text style={styles.metricCardTitle}>FEELS LIKE</Text>
                   </View>
                   <Text style={styles.metricValue}>
-                    {activeWeather.forecast?.forecastday?.[0]?.astro?.sunrise || '6:00 AM'}
+                    {Math.round(activeWeather.current.feelslike_c)}°
                   </Text>
-                  <Text style={styles.metricSubvalue}>
-                    Sunset: {activeWeather.forecast?.forecastday?.[0]?.astro?.sunset || '8:00 PM'}
+                  <Text style={styles.metricFooter}>
+                    {Math.round(activeWeather.current.feelslike_c) === Math.round(activeWeather.current.temp_c)
+                      ? 'Similar to actual temperature.'
+                      : 'Humidity/wind is altering perceived temperature.'}
                   </Text>
-                  <View style={styles.sunArcTrack}>
-                    <View style={styles.sunArcDot} />
-                  </View>
                 </View>
               </View>
 
@@ -674,6 +839,22 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#ffffff',
   },
+  cardActionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  actionBtnIcon: {
+    padding: 4,
+    marginLeft: 4,
+    backgroundColor: 'rgba(255, 255, 255, 0.15)',
+    borderRadius: 8,
+  },
+  deleteBtnIcon: {
+    padding: 4,
+    marginLeft: 4,
+    backgroundColor: 'rgba(255, 107, 107, 0.2)',
+    borderRadius: 8,
+  },
   citySubtext: {
     fontSize: 12,
     color: 'rgba(255, 255, 255, 0.5)',
@@ -796,23 +977,51 @@ const styles = StyleSheet.create({
   },
   hourlyItem: {
     alignItems: 'center',
-    marginRight: 20,
-    minWidth: 50,
+    marginRight: 16,
+    minWidth: 58,
+    paddingVertical: 8,
+    paddingHorizontal: 8,
+    borderRadius: 16,
+  },
+  hourlyItemCurrent: {
+    backgroundColor: 'rgba(56, 239, 125, 0.18)',
+    borderWidth: 1.5,
+    borderColor: '#38ef7d',
   },
   hourlyTime: {
     fontSize: 13,
     color: 'rgba(255, 255, 255, 0.8)',
-    marginBottom: 6,
+    marginBottom: 4,
+  },
+  hourlyTimeCurrent: {
+    fontWeight: '800',
+    color: '#38ef7d',
   },
   hourlyIconImage: {
     width: 36,
     height: 36,
-    marginVertical: 4,
+    marginVertical: 2,
   },
   hourlyTemp: {
     fontSize: 16,
     fontWeight: '600',
     color: '#ffffff',
+  },
+  hourlyTempCurrent: {
+    fontWeight: '800',
+    color: '#ffffff',
+  },
+  nowBadge: {
+    backgroundColor: '#38ef7d',
+    borderRadius: 6,
+    paddingHorizontal: 4,
+    paddingVertical: 2,
+    marginTop: 4,
+  },
+  nowBadgeText: {
+    fontSize: 9,
+    fontWeight: '900',
+    color: '#0a0f1d',
   },
   dailyList: {
     width: '100%',
@@ -906,21 +1115,66 @@ const styles = StyleSheet.create({
     color: 'rgba(255, 255, 255, 0.5)',
     lineHeight: 14,
   },
-  sunArcTrack: {
-    height: 4,
-    backgroundColor: 'rgba(255, 255, 255, 0.2)',
-    borderRadius: 2,
-    marginTop: 8,
-    position: 'relative',
+  sunRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-around',
+    paddingVertical: 8,
   },
-  sunArcDot: {
-    position: 'absolute',
-    left: '40%',
-    top: -3,
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    backgroundColor: '#ffce00',
+  sunBox: {
+    alignItems: 'center',
+    flex: 1,
+  },
+  sunLabel: {
+    fontSize: 12,
+    color: 'rgba(255, 255, 255, 0.6)',
+    marginTop: 4,
+  },
+  sunTime: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#ffffff',
+    marginTop: 2,
+  },
+  sunDivider: {
+    width: 1,
+    height: 40,
+    backgroundColor: 'rgba(255, 255, 255, 0.15)',
+  },
+  aqiStatus: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#38ef7d',
+    marginBottom: 4,
+  },
+  aqiDesc: {
+    fontSize: 13,
+    color: 'rgba(255, 255, 255, 0.7)',
+    lineHeight: 18,
+    marginBottom: 12,
+  },
+  aqiPollutantsRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  pollutantBadge: {
+    flex: 1,
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+    borderRadius: 12,
+    padding: 8,
+    alignItems: 'center',
+    marginHorizontal: 4,
+  },
+  pollutantLabel: {
+    fontSize: 11,
+    color: 'rgba(255, 255, 255, 0.5)',
+    fontWeight: '600',
+  },
+  pollutantValue: {
+    fontSize: 13,
+    color: '#ffffff',
+    fontWeight: '700',
+    marginTop: 2,
   },
   rawJsonButton: {
     flexDirection: 'row',

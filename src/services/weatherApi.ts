@@ -28,6 +28,17 @@ export interface WeatherCondition {
   code: number;
 }
 
+export interface AirQuality {
+  co?: number;
+  no2?: number;
+  o3?: number;
+  so2?: number;
+  pm2_5?: number;
+  pm10?: number;
+  'us-epa-index'?: number;
+  'gb-defra-index'?: number;
+}
+
 export interface CurrentWeather {
   temp_c: number;
   temp_f: number;
@@ -50,6 +61,7 @@ export interface CurrentWeather {
   uv: number;
   gust_kph: number;
   gust_mph: number;
+  air_quality?: AirQuality;
 }
 
 export interface WeatherAlert {
@@ -183,7 +195,7 @@ export async function fetchWeather(city: string): Promise<WeatherResponse> {
       params: {
         key: apiKey,
         q: city,
-        aqi: 'no',
+        aqi: 'yes',
         alerts: 'yes',
         days: 10,
       },
