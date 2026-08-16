@@ -12,6 +12,7 @@ import {
   TouchableOpacity,
   Image,
   Alert,
+  TextInput,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as Clipboard from 'expo-clipboard';
@@ -23,8 +24,9 @@ import {
 } from '../tasks/weatherTask';
 import {
   WeatherResponse,
+  fetchWeather,
   getSeverityType,
-  SeverityType,
+  HourlyWeather,
 } from '../services/weatherApi';
 
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -40,21 +42,42 @@ interface Props {
   navigation?: HomeScreenNavigationProp;
 }
 
+const DEFAULT_CITIES = ['Prague', 'London', 'Tokyo', 'New York'];
+
 export default function HomeScreen({ navigation }: Props) {
   const [zipCodes, setZipCodes] = useState<string[]>([]);
   const [defaultZip, setDefaultZip] = useState<string | null>(null);
   const [weatherMap, setWeatherMap] = useState<Record<string, WeatherResponse>>({});
 
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedCity, setSelectedCity] = useState<string | null>(null);
+  const [viewMode, setViewMode] = useState<'grid' | 'detail'>('grid');
+
   const [refreshing, setRefreshing] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
-  const [serviceRunning, setServiceRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [modalVisible, setModalVisible] = useState(false);
+  const [loadingSearch, setLoadingSearch] = useState(false);
 
   const loadData = async () => {
     const codes = await getZipCodes();
     const defZip = await getDefaultZipCode();
-    const wMap = await getWeatherMap();
+    let wMap = await getWeatherMap();
+
+    // Ensure default demo cities exist in map for rich multi-city overview
+    const citiesToLoad = Array.from(new Set([...DEFAULT_CITIES, ...codes, ...(defZip ? [defZip] : [])]));
+
+    for (const city of citiesToLoad) {
+      if (!wMap[city]) {
+        try {
+          const w = await fetchWeather(city);
+          wMap = { ...wMap, [city]: w };
+        } catch (e) {
+          console.warn(`Could not load weather for default city ${city}`, e);
+        }
+      }
+    }
+
     setZipCodes(codes);
     setDefaultZip(defZip);
     setWeatherMap(wMap);
@@ -63,7 +86,6 @@ export default function HomeScreen({ navigation }: Props) {
     }
   };
 
-  // Load stored zips + weather map on mount
   useEffect(() => {
     loadData();
     const subscription = DeviceEventEmitter.addListener('zip_changed', () => {
@@ -80,6 +102,8 @@ export default function HomeScreen({ navigation }: Props) {
       if (resultMap) {
         setWeatherMap(resultMap);
         setLastUpdated(new Date().toLocaleTimeString());
+      } else {
+        await loadData();
       }
     } catch (e: any) {
       if (e.message === 'pls update key') {
@@ -90,404 +114,420 @@ export default function HomeScreen({ navigation }: Props) {
     }
   }, []);
 
-  const defaultWeather = defaultZip ? weatherMap[defaultZip] : null;
-
-  const copyToClipboard = async () => {
-    if (defaultWeather) {
-      await Clipboard.setStringAsync(JSON.stringify(defaultWeather, null, 2));
-      Alert.alert('Success', 'Copied entire weather JSON to clipboard!');
+  const handleSearch = async () => {
+    if (!searchQuery.trim()) return;
+    setLoadingSearch(true);
+    setError(null);
+    try {
+      const query = searchQuery.trim();
+      const weather = await fetchWeather(query);
+      const cityName = weather.location.name;
+      setWeatherMap((prev: Record<string, WeatherResponse>) => ({ ...prev, [cityName]: weather }));
+      setSelectedCity(cityName);
+      setViewMode('detail');
+      setSearchQuery('');
+    } catch (e: any) {
+      Alert.alert('Search Error', e.message === 'pls update key' ? 'Please update API key in Settings' : 'Location not found.');
+    } finally {
+      setLoadingSearch(false);
     }
   };
 
-  const severity: SeverityType = defaultWeather
-    ? getSeverityType(defaultWeather.current.condition.code)
-    : 'none';
+  // Determine active city data for detail view
+  const activeCityKey = selectedCity || defaultZip || (Object.keys(weatherMap).length > 0 ? Object.keys(weatherMap)[0] : 'London');
+  const activeWeather = weatherMap[activeCityKey] || weatherMap[Object.keys(weatherMap)[0]];
 
-  const bgColor =
-    severity === 'thunderstorm'
-      ? '#2c2c54'
-      : severity === 'rain'
-      ? '#485460'
-      : severity === 'snow'
-      ? '#dfe6e9'
-      : severity === 'fog'
-      ? '#b2bec3'
-      : '#0984e3';
+  const copyToClipboard = async () => {
+    if (activeWeather) {
+      await Clipboard.setStringAsync(JSON.stringify(activeWeather, null, 2));
+      Alert.alert('Success', 'Copied weather JSON to clipboard!');
+    }
+  };
 
-  const textColor = severity === 'snow' ? '#2d3436' : '#ffffff';
+  // Dew point estimation formula
+  const getDewPoint = (tempC: number, humidity: number) => {
+    const dew = tempC - (100 - humidity) / 5;
+    return Math.round(dew);
+  };
+
+  // UV risk category helper
+  const getUvCategory = (uv: number) => {
+    if (uv <= 2) return { level: 'Low', advice: 'Low risk. Enjoy the outdoors!' };
+    if (uv <= 5) return { level: 'Moderate', advice: 'Use sun protection around midday.' };
+    if (uv <= 7) return { level: 'High', advice: 'Wear hat & sunscreen 11:00-16:00.' };
+    if (uv <= 10) return { level: 'Very High', advice: 'Extra protection required. Avoid peak sun.' };
+    return { level: 'Extreme', advice: 'Take full precautions. Avoid outdoor sun.' };
+  };
+
+  const allCityKeys = Array.from(
+    new Set([...DEFAULT_CITIES, ...zipCodes, ...Object.keys(weatherMap)])
+  );
 
   return (
-    <ScrollView
-      style={[styles.container, { backgroundColor: bgColor }]}
-      contentContainerStyle={styles.content}
-      refreshControl={
-        <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
-      }
-    >
-      <StatusBar translucent={false} barStyle={severity === 'snow' ? 'dark-content' : 'light-content'} />
+    <View style={styles.outerContainer}>
+      <StatusBar translucent backgroundColor="transparent" barStyle="light-content" />
 
-      <Text style={[styles.title, { color: textColor }]}>Weather Alerts</Text>
-
-      {error && (
-        <View style={styles.errorBox}>
-          <Text style={styles.errorText}>{error}</Text>
-        </View>
-      )}
-
-      {/* Empty State */}
-      {zipCodes.length === 0 && (
-        <View style={styles.emptyStateCard}>
-          <Text style={styles.emptyStateTitle}>Welcome to Weather Alerts! 🌤️</Text>
-          <Text style={styles.emptyStateText}>
-            Open the side menu to add a zip code and start monitoring local weather conditions.
-          </Text>
-        </View>
-      )}
-
-      {/* Default Weather Details */}
-      {defaultWeather && (
-        <>
-          {/* Main Weather Card */}
-          <View style={styles.weatherCard}>
-            <Text style={styles.cityName}>{defaultWeather.location.name}</Text>
-            <Text style={styles.region}>
-              {defaultWeather.location.region}, {defaultWeather.location.country}
-            </Text>
-
-            {defaultWeather.current.condition.icon && (
-              <Image
-                source={{ uri: `https:${defaultWeather.current.condition.icon}` }}
-                style={styles.conditionIcon}
-              />
-            )}
-
-            <Text style={styles.temp}>
-              {Math.round(defaultWeather.current.temp_c)}°C / {Math.round(defaultWeather.current.temp_f)}°F
-            </Text>
-            <Text style={styles.condition}>{defaultWeather.current.condition.text}</Text>
-
-            <View style={styles.detailsRow}>
-              <View style={styles.detailItem}>
-                <Text style={styles.detailLabel}>Feels Like</Text>
-                <Text style={styles.detailValue}>
-                  {Math.round(defaultWeather.current.feelslike_c)}°C / {Math.round(defaultWeather.current.feelslike_f)}°F
-                </Text>
-              </View>
-              <View style={styles.detailItem}>
-                <Text style={styles.detailLabel}>Humidity</Text>
-                <Text style={styles.detailValue}>{defaultWeather.current.humidity}%</Text>
-              </View>
-              <View style={styles.detailItem}>
-                <Text style={styles.detailLabel}>Wind</Text>
-                <Text style={styles.detailValue}>
-                  {Math.round(defaultWeather.current.wind_kph)} km/h
-                </Text>
-              </View>
-            </View>
-
-            {/* Sunrise and Sunset times in the main section */}
-            {defaultWeather.forecast?.forecastday?.[0] && (
-              <View style={[styles.detailsRow, styles.astroRow]}>
-                <View style={styles.detailItem}>
-                  <Text style={styles.detailLabel}>Sunrise 🌅</Text>
-                  <Text style={styles.detailValue}>
-                    {defaultWeather.forecast.forecastday[0].astro.sunrise}
-                  </Text>
-                </View>
-                <View style={styles.detailItem}>
-                  <Text style={styles.detailLabel}>Sunset 🌇</Text>
-                  <Text style={styles.detailValue}>
-                    {defaultWeather.forecast.forecastday[0].astro.sunset}
-                  </Text>
-                </View>
-              </View>
-            )}
-
+      <ScrollView
+        style={styles.container}
+        contentContainerStyle={styles.content}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#fff" />
+        }
+      >
+        {/* Top Header */}
+        <View style={styles.header}>
+          <View style={styles.headerTitleRow}>
+            <Text style={styles.appTitle}>Meteo</Text>
             <TouchableOpacity
-              onPress={() => setModalVisible(true)}
-              style={styles.rawJsonButton}
-              accessibilityLabel="Show raw API JSON modal"
+              style={styles.toggleViewBtn}
+              onPress={() => setViewMode(viewMode === 'grid' ? 'detail' : 'grid')}
             >
-              <Ionicons name="code-working-outline" size={16} color={textColor} style={{ marginRight: 6 }} />
-              <Text style={[styles.rawJsonButtonText, { color: textColor }]}>View Raw JSON</Text>
+              <Ionicons
+                name={viewMode === 'grid' ? 'grid' : 'list'}
+                size={20}
+                color="#fff"
+              />
+              <Text style={styles.toggleViewText}>
+                {viewMode === 'grid' ? 'Overview' : 'Detail'}
+              </Text>
             </TouchableOpacity>
           </View>
 
-          {/* Hourly Forecast Section */}
-          {defaultWeather.forecast?.forecastday?.[0]?.hour && (
-            <View style={styles.hourlyCard}>
-              <Text style={styles.cardSectionTitle}>Hourly Forecast</Text>
-              <View style={styles.table}>
-                {/* Table Header */}
-                <View style={[styles.tableRow, styles.tableHeader]}>
-                  <Text style={[styles.tableCellHeader, { flex: 1, color: textColor }]}>Time</Text>
-                  <Text style={[styles.tableCellHeader, { flex: 1.5, textAlign: 'center', color: textColor }]}>Condition</Text>
-                  <Text style={[styles.tableCellHeader, { flex: 1, textAlign: 'right', color: textColor }]}>Temp</Text>
-                </View>
-                {/* Table Body */}
-                {defaultWeather.forecast.forecastday[0].hour.map((h, idx) => {
-                  const timePart = h.time.split(' ')[1] || h.time;
-                  const [hourStr, minStr] = timePart.split(':');
-                  const hourInt = parseInt(hourStr, 10);
-                  const ampm = hourInt >= 12 ? 'PM' : 'AM';
-                  const displayHour = (hourInt % 12) || 12;
-                  const formattedTime = `${displayHour}:${minStr} ${ampm}`;
+          {/* Glass Search Bar */}
+          <View style={styles.searchBar}>
+            <Ionicons name="search-outline" size={18} color="rgba(255, 255, 255, 0.6)" style={{ marginRight: 8 }} />
+            <TextInput
+              style={styles.searchInput}
+              placeholder="Search for a city or airport"
+              placeholderTextColor="rgba(255, 255, 255, 0.5)"
+              value={searchQuery}
+              onChangeText={setSearchQuery}
+              onSubmitEditing={handleSearch}
+              returnKeyType="search"
+            />
+            {loadingSearch ? (
+              <Ionicons name="reload-outline" size={18} color="#fff" style={{ marginLeft: 6 }} />
+            ) : searchQuery.length > 0 ? (
+              <TouchableOpacity onPress={() => setSearchQuery('')}>
+                <Ionicons name="close-circle" size={18} color="rgba(255,255,255,0.6)" />
+              </TouchableOpacity>
+            ) : null}
+          </View>
+        </View>
 
-                  return (
-                    <View key={idx} style={[styles.tableRow, idx % 2 === 0 ? styles.tableRowEven : styles.tableRowOdd]}>
-                      <Text style={[styles.tableCell, { flex: 1, fontWeight: '500', color: textColor }]}>{formattedTime}</Text>
-                      <View style={{ flex: 1.5, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }}>
-                        {h.condition.icon && (
-                          <Image
-                            source={{ uri: `https:${h.condition.icon}` }}
-                            style={styles.hourlyIcon}
-                          />
-                        )}
-                        <Text style={[styles.tableCellText, { color: textColor }]} numberOfLines={1}>
-                          {h.condition.text}
+        {error && (
+          <View style={styles.errorBox}>
+            <Ionicons name="warning-outline" size={20} color="#fff" style={{ marginRight: 8 }} />
+            <Text style={styles.errorText}>{error}</Text>
+          </View>
+        )}
+
+        {/* ==================== VIEW MODE: OVERVIEW GRID ==================== */}
+        {viewMode === 'grid' ? (
+          <View style={styles.gridSection}>
+            <Text style={styles.sectionHeaderTitle}>Weather Locations</Text>
+            <View style={styles.cityGrid}>
+              {allCityKeys.map((cityKey: string) => {
+                const w = weatherMap[cityKey];
+                const isSelected = activeCityKey === cityKey;
+
+                return (
+                  <TouchableOpacity
+                    key={cityKey}
+                    style={[styles.cityCard, isSelected && styles.cityCardSelected]}
+                    onPress={() => {
+                      setSelectedCity(cityKey);
+                      setViewMode('detail');
+                    }}
+                    activeOpacity={0.8}
+                  >
+                    <View style={styles.cardHeaderRow}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.cityName} numberOfLines={1}>
+                          {w?.location?.name || cityKey}
+                        </Text>
+                        <Text style={styles.citySubtext} numberOfLines={1}>
+                          {w?.location?.country || 'Location'}
                         </Text>
                       </View>
-                      <Text style={[styles.tableCell, { flex: 1, textAlign: 'right', color: textColor }]}>
-                        {Math.round(h.temp_c)}°C / {Math.round(h.temp_f)}°F
-                      </Text>
+                      {w?.current?.condition?.icon && (
+                        <Image
+                          source={{ uri: `https:${w.current.condition.icon}` }}
+                          style={styles.gridIcon}
+                        />
+                      )}
                     </View>
-                  );
-                })}
-              </View>
-            </View>
-          )}
 
-          {/* Future Date Forecast Section */}
-          {defaultWeather.forecast?.forecastday && defaultWeather.forecast.forecastday.length > 0 && (
-            <View style={styles.forecastCard}>
-              <Text style={styles.forecastTitle}>Extended Forecast</Text>
-              {defaultWeather.forecast.forecastday.map((day, index) => {
-                const dayDate = new Date(day.date + 'T00:00:00'); // Force local interpretation
-                const dayName = dayDate.toLocaleDateString(undefined, { weekday: 'short' });
-                return (
-                  <View key={index} style={styles.forecastRow}>
-                    <Text style={styles.forecastDay}>{dayName}</Text>
-                    <Text style={styles.forecastCond} numberOfLines={1}>{day.day.condition?.text || 'N/A'}</Text>
-                    <Text style={styles.forecastTemp}>
-                      {Math.round(day.day.maxtemp_c)}° / {Math.round(day.day.mintemp_c)}°
-                    </Text>
-                  </View>
+                    <View style={styles.cardBottomRow}>
+                      <View>
+                        <Text style={styles.gridTemp}>
+                          {w ? `${Math.round(w.current.temp_c)}°` : '--°'}
+                        </Text>
+                        <Text style={styles.gridCondition} numberOfLines={1}>
+                          {w?.current?.condition?.text || 'Loading...'}
+                        </Text>
+                      </View>
+
+                      {w?.forecast?.forecastday?.[0]?.day && (
+                        <View style={styles.rangeContainer}>
+                          <Text style={styles.rangeText}>
+                            H: {Math.round(w.forecast.forecastday[0].day.maxtemp_c)}°
+                          </Text>
+                          <Text style={styles.rangeText}>
+                            L: {Math.round(w.forecast.forecastday[0].day.mintemp_c)}°
+                          </Text>
+                        </View>
+                      )}
+                    </View>
+                  </TouchableOpacity>
                 );
               })}
             </View>
-          )}
-
-          {/* Location Details Card */}
-          <View style={styles.detailsCard}>
-            <Text style={styles.cardSectionTitle}>Location Details</Text>
-            <View style={styles.gridRow}>
-              <View style={styles.gridItem}>
-                <Text style={styles.detailLabel}>Latitude / Longitude</Text>
-                <Text style={styles.detailValue}>{defaultWeather.location.lat}° / {defaultWeather.location.lon}°</Text>
-              </View>
-              <View style={styles.gridItem}>
-                <Text style={styles.detailLabel}>Timezone</Text>
-                <Text style={styles.detailValue}>{defaultWeather.location.tz_id}</Text>
-              </View>
-            </View>
-            <View style={styles.gridRow}>
-              <View style={styles.gridItem}>
-                <Text style={styles.detailLabel}>Local Time</Text>
-                <Text style={styles.detailValue}>{defaultWeather.location.localtime}</Text>
-              </View>
-              <View style={styles.gridItem}>
-                <Text style={styles.detailLabel}>Localtime Epoch</Text>
-                <Text style={styles.detailValue}>{defaultWeather.location.localtime_epoch}</Text>
-              </View>
-            </View>
           </View>
+        ) : (
+          /* ==================== VIEW MODE: CITY DETAIL ==================== */
+          activeWeather && (
+            <View style={styles.detailSection}>
+              {/* Back to grid button */}
+              <TouchableOpacity
+                style={styles.backGridBtn}
+                onPress={() => setViewMode('grid')}
+              >
+                <Ionicons name="chevron-back" size={18} color="#fff" />
+                <Text style={styles.backGridText}>All Cities</Text>
+              </TouchableOpacity>
 
-          {/* Current Conditions Extra Details */}
-          <View style={styles.detailsCard}>
-            <Text style={styles.cardSectionTitle}>Current Conditions Details</Text>
-            <View style={styles.gridRow}>
-              <View style={styles.gridItem}>
-                <Text style={styles.detailLabel}>Wind Speed</Text>
-                <Text style={styles.detailValue}>{defaultWeather.current.wind_kph} kph / {defaultWeather.current.wind_mph} mph</Text>
-              </View>
-              <View style={styles.gridItem}>
-                <Text style={styles.detailLabel}>Wind Direction</Text>
-                <Text style={styles.detailValue}>{defaultWeather.current.wind_dir} ({defaultWeather.current.wind_degree}°)</Text>
-              </View>
-            </View>
-            <View style={styles.gridRow}>
-              <View style={styles.gridItem}>
-                <Text style={styles.detailLabel}>Pressure</Text>
-                <Text style={styles.detailValue}>{defaultWeather.current.pressure_mb} mb / {defaultWeather.current.pressure_in} in</Text>
-              </View>
-              <View style={styles.gridItem}>
-                <Text style={styles.detailLabel}>Precipitation</Text>
-                <Text style={styles.detailValue}>{defaultWeather.current.precip_mm} mm / {defaultWeather.current.precip_in} in</Text>
-              </View>
-            </View>
-            <View style={styles.gridRow}>
-              <View style={styles.gridItem}>
-                <Text style={styles.detailLabel}>Cloud Cover</Text>
-                <Text style={styles.detailValue}>{defaultWeather.current.cloud}%</Text>
-              </View>
-              <View style={styles.gridItem}>
-                <Text style={styles.detailLabel}>UV Index</Text>
-                <Text style={styles.detailValue}>{defaultWeather.current.uv}</Text>
-              </View>
-            </View>
-            <View style={styles.gridRow}>
-              <View style={styles.gridItem}>
-                <Text style={styles.detailLabel}>Visibility</Text>
-                <Text style={styles.detailValue}>{defaultWeather.current.vis_km} km / {defaultWeather.current.vis_miles} miles</Text>
-              </View>
-              <View style={styles.gridItem}>
-                <Text style={styles.detailLabel}>Wind Gust</Text>
-                <Text style={styles.detailValue}>{defaultWeather.current.gust_kph} kph / {defaultWeather.current.gust_mph} mph</Text>
-              </View>
-            </View>
-          </View>
+              {/* Hero Main Weather Card */}
+              <View style={styles.heroCard}>
+                <View style={styles.heroLeft}>
+                  <Text style={styles.heroCity}>{activeWeather.location.name}</Text>
+                  <Text style={styles.heroCountry}>
+                    {activeWeather.location.region ? `${activeWeather.location.region}, ` : ''}
+                    {activeWeather.location.country}
+                  </Text>
+                  <Text style={styles.heroTemp}>
+                    {Math.round(activeWeather.current.temp_c)}°
+                  </Text>
+                  <Text style={styles.heroCondition}>
+                    {activeWeather.current.condition.text}
+                  </Text>
 
-          {/* Today's Astronomy & Day Highlights */}
-          {defaultWeather.forecast?.forecastday?.[0] && (
-            <View style={styles.detailsCard}>
-              <Text style={styles.cardSectionTitle}>Today's Astronomy & Highlights</Text>
-              <View style={styles.gridRow}>
-                <View style={styles.gridItem}>
-                  <Text style={styles.detailLabel}>Sunrise</Text>
-                  <Text style={styles.detailValue}>{defaultWeather.forecast.forecastday[0].astro.sunrise}</Text>
+                  {activeWeather.forecast?.forecastday?.[0]?.day && (
+                    <Text style={styles.heroHL}>
+                      H:{Math.round(activeWeather.forecast.forecastday[0].day.maxtemp_c)}°  L:
+                      {Math.round(activeWeather.forecast.forecastday[0].day.mintemp_c)}°
+                    </Text>
+                  )}
                 </View>
-                <View style={styles.gridItem}>
-                  <Text style={styles.detailLabel}>Sunset</Text>
-                  <Text style={styles.detailValue}>{defaultWeather.forecast.forecastday[0].astro.sunset}</Text>
-                </View>
+
+                {activeWeather.current.condition.icon && (
+                  <Image
+                    source={{ uri: `https:${activeWeather.current.condition.icon}` }}
+                    style={styles.heroIcon}
+                  />
+                )}
               </View>
-              <View style={styles.gridRow}>
-                <View style={styles.gridItem}>
-                  <Text style={styles.detailLabel}>Moonrise</Text>
-                  <Text style={styles.detailValue}>{defaultWeather.forecast.forecastday[0].astro.moonrise}</Text>
+
+              {/* Hourly Forecast Section */}
+              {activeWeather.forecast?.forecastday?.[0]?.hour && (
+                <View style={styles.glassCard}>
+                  <View style={styles.cardHeader}>
+                    <Ionicons name="time-outline" size={18} color="rgba(255,255,255,0.7)" style={{ marginRight: 6 }} />
+                    <Text style={styles.cardHeaderTitle}>HOURLY FORECAST</Text>
+                  </View>
+
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.hourlyScroll}>
+                    {activeWeather.forecast.forecastday[0].hour.map((h: HourlyWeather, idx: number) => {
+                      const timePart = h.time.split(' ')[1] || h.time;
+                      const [hourStr] = timePart.split(':');
+                      const hourInt = parseInt(hourStr, 10);
+                      const displayHour = hourInt === new Date().getHours() ? 'Now' : `${(hourInt % 12) || 12} ${hourInt >= 12 ? 'PM' : 'AM'}`;
+
+                      return (
+                        <View key={idx} style={styles.hourlyItem}>
+                          <Text style={styles.hourlyTime}>{displayHour}</Text>
+                          {h.condition.icon && (
+                            <Image
+                              source={{ uri: `https:${h.condition.icon}` }}
+                              style={styles.hourlyIconImage}
+                            />
+                          )}
+                          <Text style={styles.hourlyTemp}>{Math.round(h.temp_c)}°</Text>
+                        </View>
+                      );
+                    })}
+                  </ScrollView>
                 </View>
-                <View style={styles.gridItem}>
-                  <Text style={styles.detailLabel}>Moonset</Text>
-                  <Text style={styles.detailValue}>{defaultWeather.forecast.forecastday[0].astro.moonset}</Text>
+              )}
+
+              {/* Multi-day Forecast Section */}
+              {activeWeather.forecast?.forecastday && (
+                <View style={styles.glassCard}>
+                  <View style={styles.cardHeader}>
+                    <Ionicons name="calendar-outline" size={18} color="rgba(255,255,255,0.7)" style={{ marginRight: 6 }} />
+                    <Text style={styles.cardHeaderTitle}>5-DAY FORECAST</Text>
+                  </View>
+
+                  <View style={styles.dailyList}>
+                    {activeWeather.forecast.forecastday.slice(0, 5).map((day: any, idx: number) => {
+                      const dayDate = new Date(day.date + 'T00:00:00');
+                      const dayName = idx === 0 ? 'Today' : dayDate.toLocaleDateString(undefined, { weekday: 'short' });
+                      const min = Math.round(day.day.mintemp_c);
+                      const max = Math.round(day.day.maxtemp_c);
+
+                      return (
+                        <View key={idx} style={styles.dailyRow}>
+                          <Text style={styles.dailyDay}>{dayName}</Text>
+                          {day.day.condition?.icon && (
+                            <Image
+                              source={{ uri: `https:${day.day.condition.icon}` }}
+                              style={styles.dailyIcon}
+                            />
+                          )}
+                          <Text style={styles.dailyMin}>{min}°</Text>
+                          {/* Color bar representing temperature scale */}
+                          <View style={styles.tempBarTrack}>
+                            <View style={[styles.tempBarFill, { left: '15%', right: '20%' }]} />
+                          </View>
+                          <Text style={styles.dailyMax}>{max}°</Text>
+                        </View>
+                      );
+                    })}
+                  </View>
                 </View>
-              </View>
-              <View style={styles.gridRow}>
-                <View style={styles.gridItem}>
-                  <Text style={styles.detailLabel}>Moon Phase</Text>
-                  <Text style={styles.detailValue}>{defaultWeather.forecast.forecastday[0].astro.moon_phase}</Text>
-                </View>
-                <View style={styles.gridItem}>
-                  <Text style={styles.detailLabel}>Moon Illumination</Text>
-                  <Text style={styles.detailValue}>{defaultWeather.forecast.forecastday[0].astro.moon_illumination}%</Text>
-                </View>
-              </View>
-              <View style={styles.gridRow}>
-                <View style={styles.gridItem}>
-                  <Text style={styles.detailLabel}>Max / Min Temp</Text>
-                  <Text style={styles.detailValue}>
-                    {Math.round(defaultWeather.forecast.forecastday[0].day.maxtemp_c)}°C / {Math.round(defaultWeather.forecast.forecastday[0].day.mintemp_c)}°C
-                    {'\n'}({Math.round(defaultWeather.forecast.forecastday[0].day.maxtemp_f)}°F / {Math.round(defaultWeather.forecast.forecastday[0].day.mintemp_f)}°F)
+              )}
+
+              {/* 2x3 Weather Metrics Grid */}
+              <View style={styles.metricsGrid}>
+                {/* 1. WIND */}
+                <View style={styles.metricCard}>
+                  <View style={styles.metricCardHeader}>
+                    <Ionicons name="navigate-outline" size={16} color="rgba(255,255,255,0.7)" style={{ marginRight: 6 }} />
+                    <Text style={styles.metricCardTitle}>WIND</Text>
+                  </View>
+                  <Text style={styles.metricValue}>{Math.round(activeWeather.current.wind_kph)} km/h</Text>
+                  <Text style={styles.metricSubvalue}>
+                    Dir: {activeWeather.current.wind_dir} ({activeWeather.current.wind_degree}°)
+                  </Text>
+                  <Text style={styles.metricFooter}>
+                    Gusts up to {Math.round(activeWeather.current.gust_kph)} km/h
                   </Text>
                 </View>
-                <View style={styles.gridItem}>
-                  <Text style={styles.detailLabel}>Avg Temp</Text>
-                  <Text style={styles.detailValue}>
-                    {Math.round(defaultWeather.forecast.forecastday[0].day.avgtemp_c)}°C / {Math.round(defaultWeather.forecast.forecastday[0].day.avgtemp_f)}°F
+
+                {/* 2. HUMIDITY & DEW POINT */}
+                <View style={styles.metricCard}>
+                  <View style={styles.metricCardHeader}>
+                    <Ionicons name="water-outline" size={16} color="rgba(255,255,255,0.7)" style={{ marginRight: 6 }} />
+                    <Text style={styles.metricCardTitle}>HUMIDITY</Text>
+                  </View>
+                  <Text style={styles.metricValue}>{activeWeather.current.humidity}%</Text>
+                  <Text style={styles.metricSubvalue}>
+                    Dew Point: {getDewPoint(activeWeather.current.temp_c, activeWeather.current.humidity)}°C
                   </Text>
+                  <Text style={styles.metricFooter}>
+                    The dew point is {getDewPoint(activeWeather.current.temp_c, activeWeather.current.humidity)}° right now.
+                  </Text>
+                </View>
+
+                {/* 3. PRESSURE */}
+                <View style={styles.metricCard}>
+                  <View style={styles.metricCardHeader}>
+                    <Ionicons name="speedometer-outline" size={16} color="rgba(255,255,255,0.7)" style={{ marginRight: 6 }} />
+                    <Text style={styles.metricCardTitle}>PRESSURE</Text>
+                  </View>
+                  <Text style={styles.metricValue}>{activeWeather.current.pressure_mb} hPa</Text>
+                  <Text style={styles.metricSubvalue}>
+                    {activeWeather.current.pressure_in} inHg
+                  </Text>
+                  <Text style={styles.metricFooter}>Atmospheric pressure is steady.</Text>
+                </View>
+
+                {/* 4. UV INDEX */}
+                <View style={styles.metricCard}>
+                  <View style={styles.metricCardHeader}>
+                    <Ionicons name="sunny-outline" size={16} color="rgba(255,255,255,0.7)" style={{ marginRight: 6 }} />
+                    <Text style={styles.metricCardTitle}>UV INDEX</Text>
+                  </View>
+                  <Text style={styles.metricValue}>
+                    {activeWeather.current.uv}{' '}
+                    <Text style={{ fontSize: 16 }}>{getUvCategory(activeWeather.current.uv).level}</Text>
+                  </Text>
+                  <Text style={styles.metricFooter}>
+                    {getUvCategory(activeWeather.current.uv).advice}
+                  </Text>
+                </View>
+
+                {/* 5. VISIBILITY */}
+                <View style={styles.metricCard}>
+                  <View style={styles.metricCardHeader}>
+                    <Ionicons name="eye-outline" size={16} color="rgba(255,255,255,0.7)" style={{ marginRight: 6 }} />
+                    <Text style={styles.metricCardTitle}>VISIBILITY</Text>
+                  </View>
+                  <Text style={styles.metricValue}>{activeWeather.current.vis_km} km</Text>
+                  <Text style={styles.metricFooter}>
+                    {activeWeather.current.vis_km >= 10 ? "It's perfectly clear right now." : "Reduced visibility due to haze/clouds."}
+                  </Text>
+                </View>
+
+                {/* 6. SUNRISE & SUNSET */}
+                <View style={styles.metricCard}>
+                  <View style={styles.metricCardHeader}>
+                    <Ionicons name="time-outline" size={16} color="rgba(255,255,255,0.7)" style={{ marginRight: 6 }} />
+                    <Text style={styles.metricCardTitle}>SUNRISE</Text>
+                  </View>
+                  <Text style={styles.metricValue}>
+                    {activeWeather.forecast?.forecastday?.[0]?.astro?.sunrise || '6:00 AM'}
+                  </Text>
+                  <Text style={styles.metricSubvalue}>
+                    Sunset: {activeWeather.forecast?.forecastday?.[0]?.astro?.sunset || '8:00 PM'}
+                  </Text>
+                  <View style={styles.sunArcTrack}>
+                    <View style={styles.sunArcDot} />
+                  </View>
                 </View>
               </View>
-              <View style={styles.gridRow}>
-                <View style={styles.gridItem}>
-                  <Text style={styles.detailLabel}>Max Wind</Text>
-                  <Text style={styles.detailValue}>
-                    {defaultWeather.forecast.forecastday[0].day.maxwind_kph} kph / {defaultWeather.forecast.forecastday[0].day.maxwind_mph} mph
-                  </Text>
-                </View>
-                <View style={styles.gridItem}>
-                  <Text style={styles.detailLabel}>Total Precip / Snow</Text>
-                  <Text style={styles.detailValue}>
-                    {defaultWeather.forecast.forecastday[0].day.totalprecip_mm} mm / {defaultWeather.forecast.forecastday[0].day.totalsnow_cm} cm
-                  </Text>
-                </View>
-              </View>
-              <View style={styles.gridRow}>
-                <View style={styles.gridItem}>
-                  <Text style={styles.detailLabel}>Avg Visibility</Text>
-                  <Text style={styles.detailValue}>
-                    {defaultWeather.forecast.forecastday[0].day.avgvis_km} km / {defaultWeather.forecast.forecastday[0].day.avgvis_miles} miles
-                  </Text>
-                </View>
-                <View style={styles.gridItem}>
-                  <Text style={styles.detailLabel}>Avg Humidity / UV</Text>
-                  <Text style={styles.detailValue}>
-                    {defaultWeather.forecast.forecastday[0].day.avghumidity}% / {defaultWeather.forecast.forecastday[0].day.uv}
-                  </Text>
-                </View>
-              </View>
-              <View style={styles.gridRow}>
-                <View style={styles.gridItem}>
-                  <Text style={styles.detailLabel}>Chance of Rain / Snow</Text>
-                  <Text style={styles.detailValue}>
-                    {defaultWeather.forecast.forecastday[0].day.daily_chance_of_rain}% / {defaultWeather.forecast.forecastday[0].day.daily_chance_of_snow}%
-                  </Text>
-                </View>
-              </View>
+
+              {/* View Raw JSON Action Button */}
+              <TouchableOpacity
+                onPress={() => setModalVisible(true)}
+                style={styles.rawJsonButton}
+              >
+                <Ionicons name="code-working-outline" size={16} color="#fff" style={{ marginRight: 6 }} />
+                <Text style={styles.rawJsonButtonText}>View Raw Weather JSON</Text>
+              </TouchableOpacity>
             </View>
-          )}
-        </>
-      )}
+          )
+        )}
 
-      {/* Active Alerts for all Zip Codes */}
-      {zipCodes.map((zip, i) => {
-        const w = weatherMap[zip];
-        if (!w) return null;
-        const sev = getSeverityType(w.current.condition.code);
-        if (sev === 'none' && (!w.alerts?.alert || w.alerts.alert.length === 0)) return null;
+        {/* Active Alerts Section */}
+        {zipCodes.map((zip: string, i: number) => {
+          const w = weatherMap[zip];
+          if (!w) return null;
+          const sev = getSeverityType(w.current.condition.code);
+          if (sev === 'none' && (!w.alerts?.alert || w.alerts.alert.length === 0)) return null;
 
-        return (
-          <View key={`alert-${zip}-${i}`} style={styles.alertCard}>
-            <Text style={styles.alertTitle}>Alerts for {w.location.name} ({zip})</Text>
-            {sev !== 'none' && (
-              <Text style={styles.alertText}>
-                ⚠️ {sev === 'thunderstorm' && '⛈ Thunderstorm detected'}
-                {sev === 'rain' && '🌧 Rain detected'}
-                {sev === 'snow' && '❄️ Snow detected'}
-                {sev === 'fog' && '🌫 Fog detected'}
-              </Text>
-            )}
-            {w.alerts?.alert && w.alerts.alert.length > 0 && w.alerts.alert.map((a, j) => (
-              <View key={j} style={styles.apiAlert}>
-                <Text style={styles.alertText}>📢 {a.headline || a.event}</Text>
-                {a.desc ? (
-                  <Text style={styles.alertDesc} numberOfLines={3}>
-                    {a.desc}
-                  </Text>
-                ) : null}
-              </View>
-            ))}
-          </View>
-        );
-      })}
+          return (
+            <View key={`alert-${zip}-${i}`} style={styles.alertCard}>
+              <Text style={styles.alertTitle}>Alerts for {w.location.name} ({zip})</Text>
+              {sev !== 'none' && (
+                <Text style={styles.alertText}>
+                  ⚠️ {sev === 'thunderstorm' && 'Thunderstorm detected'}
+                  {sev === 'rain' && 'Rain detected'}
+                  {sev === 'snow' && 'Snow detected'}
+                  {sev === 'fog' && 'Fog detected'}
+                </Text>
+              )}
+            </View>
+          );
+        })}
 
-      {/* Status */}
-      <View style={styles.statusRow}>
+        {/* Status Line */}
         {lastUpdated && (
-          <Text style={[styles.statusText, { color: textColor }]}>
-            Last updated: {lastUpdated}
+          <Text style={styles.statusText}>
+            Updated at {lastUpdated}
           </Text>
         )}
-        <View style={styles.serviceStatus}>
-          <View
-            style={[
-              styles.statusDot,
-              { backgroundColor: serviceRunning ? '#00b894' : '#d63031' },
-            ]}
-          />
-          <Text style={[styles.statusText, { color: textColor }]}>
-            Service: {serviceRunning ? 'Running' : 'Stopped'}
-          </Text>
-        </View>
-      </View>
+      </ScrollView>
 
       {/* Raw JSON Modal */}
       <Modal
@@ -501,104 +541,453 @@ export default function HomeScreen({ navigation }: Props) {
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Raw Weather API JSON</Text>
               <View style={styles.modalHeaderButtons}>
-                <TouchableOpacity
-                  style={styles.copyButton}
-                  onPress={copyToClipboard}
-                  accessibilityLabel="Copy entire JSON"
-                >
-                  <Ionicons name="copy-outline" size={18} color="#0984e3" style={{ marginRight: 4 }} />
+                <TouchableOpacity style={styles.copyButton} onPress={copyToClipboard}>
+                  <Ionicons name="copy-outline" size={16} color="#007aff" style={{ marginRight: 4 }} />
                   <Text style={styles.copyButtonText}>Copy</Text>
                 </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.closeButton}
-                  onPress={() => setModalVisible(false)}
-                  accessibilityLabel="Close JSON modal"
-                >
-                  <Ionicons name="close" size={24} color="#333" />
+                <TouchableOpacity style={styles.closeButton} onPress={() => setModalVisible(false)}>
+                  <Ionicons name="close" size={22} color="#333" />
                 </TouchableOpacity>
               </View>
             </View>
             <ScrollView style={styles.jsonScrollView}>
               <Text style={styles.jsonText}>
-                {defaultWeather ? JSON.stringify(defaultWeather, null, 2) : 'No weather data loaded'}
+                {activeWeather ? JSON.stringify(activeWeather, null, 2) : 'No weather data'}
               </Text>
             </ScrollView>
           </View>
         </View>
       </Modal>
-    </ScrollView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
+  outerContainer: {
+    flex: 1,
+    backgroundColor: '#0a0f1d',
+  },
   container: {
     flex: 1,
   },
-  astroRow: {
-    marginTop: 16,
-    borderTopWidth: 1,
-    borderTopColor: 'rgba(255, 255, 255, 0.15)',
-    paddingTop: 16,
+  content: {
+    paddingHorizontal: 16,
+    paddingTop: Platform.OS === 'android' ? 50 : 60,
+    paddingBottom: 40,
+  },
+  header: {
+    marginBottom: 20,
+  },
+  headerTitleRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  appTitle: {
+    fontSize: 32,
+    fontWeight: '800',
+    color: '#ffffff',
+    letterSpacing: -0.5,
+  },
+  toggleViewBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.12)',
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.2)',
+  },
+  toggleViewText: {
+    color: '#ffffff',
+    fontSize: 13,
+    fontWeight: '600',
+    marginLeft: 6,
+  },
+  searchBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+    borderRadius: 22,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.15)',
+  },
+  searchInput: {
+    flex: 1,
+    color: '#ffffff',
+    fontSize: 15,
+    padding: 0,
+  },
+  errorBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(235, 77, 75, 0.85)',
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 16,
+  },
+  errorText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  sectionHeaderTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#ffffff',
+    marginBottom: 14,
+  },
+  gridSection: {
+    marginBottom: 20,
+  },
+  cityGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+  },
+  cityCard: {
+    width: '48%',
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+    borderRadius: 20,
+    padding: 16,
+    marginBottom: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.12)',
+    justifyContent: 'space-between',
+    minHeight: 140,
+  },
+  cityCardSelected: {
+    borderColor: '#38ef7d',
+    backgroundColor: 'rgba(56, 239, 125, 0.12)',
+  },
+  cardHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+  },
+  cityName: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#ffffff',
+  },
+  citySubtext: {
+    fontSize: 12,
+    color: 'rgba(255, 255, 255, 0.5)',
+    marginTop: 2,
+  },
+  gridIcon: {
+    width: 38,
+    height: 38,
+  },
+  cardBottomRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-end',
+    marginTop: 12,
+  },
+  gridTemp: {
+    fontSize: 28,
+    fontWeight: '300',
+    color: '#ffffff',
+  },
+  gridCondition: {
+    fontSize: 12,
+    color: 'rgba(255, 255, 255, 0.7)',
+    marginTop: 2,
+  },
+  rangeContainer: {
+    alignItems: 'flex-end',
+  },
+  rangeText: {
+    fontSize: 11,
+    color: 'rgba(255, 255, 255, 0.6)',
+  },
+  detailSection: {
+    marginBottom: 20,
+  },
+  backGridBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 16,
+    marginBottom: 14,
+  },
+  backGridText: {
+    color: '#ffffff',
+    fontSize: 13,
+    fontWeight: '600',
+    marginLeft: 2,
+  },
+  heroCard: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+    borderRadius: 24,
+    padding: 24,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.15)',
+  },
+  heroLeft: {
+    flex: 1,
+  },
+  heroCity: {
+    fontSize: 26,
+    fontWeight: '800',
+    color: '#ffffff',
+  },
+  heroCountry: {
+    fontSize: 13,
+    color: 'rgba(255, 255, 255, 0.6)',
+    marginBottom: 8,
+  },
+  heroTemp: {
+    fontSize: 54,
+    fontWeight: '200',
+    color: '#ffffff',
+  },
+  heroCondition: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: 'rgba(255, 255, 255, 0.9)',
+    marginTop: 2,
+  },
+  heroHL: {
+    fontSize: 13,
+    color: 'rgba(255, 255, 255, 0.6)',
+    marginTop: 4,
+  },
+  heroIcon: {
+    width: 90,
+    height: 90,
+  },
+  glassCard: {
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+    borderRadius: 20,
+    padding: 16,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.12)',
+  },
+  cardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255, 255, 255, 0.1)',
+    paddingBottom: 10,
+    marginBottom: 12,
+  },
+  cardHeaderTitle: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: 'rgba(255, 255, 255, 0.7)',
+    letterSpacing: 1,
+  },
+  hourlyScroll: {
+    flexDirection: 'row',
+  },
+  hourlyItem: {
+    alignItems: 'center',
+    marginRight: 20,
+    minWidth: 50,
+  },
+  hourlyTime: {
+    fontSize: 13,
+    color: 'rgba(255, 255, 255, 0.8)',
+    marginBottom: 6,
+  },
+  hourlyIconImage: {
+    width: 36,
+    height: 36,
+    marginVertical: 4,
+  },
+  hourlyTemp: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#ffffff',
+  },
+  dailyList: {
+    width: '100%',
+  },
+  dailyRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255, 255, 255, 0.06)',
+  },
+  dailyDay: {
+    width: 60,
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#ffffff',
+  },
+  dailyIcon: {
+    width: 30,
+    height: 30,
+  },
+  dailyMin: {
+    width: 32,
+    fontSize: 14,
+    color: 'rgba(255, 255, 255, 0.6)',
+    textAlign: 'right',
+  },
+  dailyMax: {
+    width: 32,
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#ffffff',
+    textAlign: 'left',
+  },
+  tempBarTrack: {
+    flex: 1,
+    height: 4,
+    backgroundColor: 'rgba(255, 255, 255, 0.15)',
+    borderRadius: 2,
+    marginHorizontal: 12,
+    position: 'relative',
+  },
+  tempBarFill: {
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    backgroundColor: '#38ef7d',
+    borderRadius: 2,
+  },
+  metricsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+  },
+  metricCard: {
+    width: '48%',
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+    borderRadius: 20,
+    padding: 16,
+    marginBottom: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.12)',
+    justifyContent: 'space-between',
+    minHeight: 140,
+  },
+  metricCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  metricCardTitle: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: 'rgba(255, 255, 255, 0.6)',
+    letterSpacing: 0.8,
+  },
+  metricValue: {
+    fontSize: 22,
+    fontWeight: '700',
+    color: '#ffffff',
+    marginBottom: 4,
+  },
+  metricSubvalue: {
+    fontSize: 12,
+    color: 'rgba(255, 255, 255, 0.7)',
+    marginBottom: 6,
+  },
+  metricFooter: {
+    fontSize: 11,
+    color: 'rgba(255, 255, 255, 0.5)',
+    lineHeight: 14,
+  },
+  sunArcTrack: {
+    height: 4,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    borderRadius: 2,
+    marginTop: 8,
+    position: 'relative',
+  },
+  sunArcDot: {
+    position: 'absolute',
+    left: '40%',
+    top: -3,
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#ffce00',
   },
   rawJsonButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(255, 255, 255, 0.15)',
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.3)',
-    borderRadius: 20,
-    paddingVertical: 8,
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    borderRadius: 18,
+    paddingVertical: 10,
     paddingHorizontal: 16,
-    marginTop: 16,
-    alignSelf: 'center',
+    marginTop: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.2)',
   },
   rawJsonButtonText: {
-    fontSize: 14,
+    color: '#ffffff',
+    fontSize: 13,
     fontWeight: '600',
   },
-  hourlyCard: {
-    backgroundColor: 'rgba(255, 255, 255, 0.12)',
+  alertCard: {
+    backgroundColor: 'rgba(255, 165, 0, 0.85)',
     borderRadius: 16,
     padding: 16,
-    marginBottom: 16,
+    marginBottom: 14,
   },
-  table: {
-    width: '100%',
-  },
-  tableRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: 'rgba(255, 255, 255, 0.1)',
-  },
-  tableHeader: {
-    borderBottomWidth: 2,
-    borderBottomColor: 'rgba(255, 255, 255, 0.3)',
-    paddingBottom: 6,
+  alertTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#fff',
     marginBottom: 4,
   },
-  tableRowEven: {
-    backgroundColor: 'rgba(255, 255, 255, 0.03)',
-  },
-  tableRowOdd: {
-    backgroundColor: 'transparent',
-  },
-  tableCellHeader: {
-    fontWeight: 'bold',
-    fontSize: 14,
-  },
-  tableCell: {
-    fontSize: 14,
-  },
-  tableCellText: {
+  alertText: {
     fontSize: 13,
-    marginLeft: 4,
-    flexShrink: 1,
+    color: '#fff',
   },
-  hourlyIcon: {
-    width: 28,
-    height: 28,
+  statusText: {
+    textAlign: 'center',
+    fontSize: 12,
+    color: 'rgba(255, 255, 255, 0.4)',
+    marginTop: 10,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.75)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  modalContent: {
+    width: '100%',
+    height: '80%',
+    backgroundColor: '#1e293b',
+    borderRadius: 20,
+    padding: 16,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255, 255, 255, 0.1)',
+    paddingBottom: 8,
+  },
+  modalTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#fff',
   },
   modalHeaderButtons: {
     flexDirection: 'row',
@@ -607,273 +996,29 @@ const styles = StyleSheet.create({
   copyButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#e1f5fe',
-    paddingVertical: 6,
-    paddingHorizontal: 12,
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    paddingVertical: 4,
+    paddingHorizontal: 10,
     borderRadius: 8,
-    marginRight: 12,
-  },
-  copyButtonText: {
-    fontSize: 14,
-    color: '#0984e3',
-    fontWeight: '600',
-  },
-  jsonButton: {
-    position: 'absolute',
-    top: 16,
-    right: 16,
-    padding: 8,
-    borderRadius: 8,
-    backgroundColor: 'rgba(255, 255, 255, 0.2)',
-    zIndex: 10,
-  },
-  conditionIcon: {
-    width: 64,
-    height: 64,
-    marginVertical: 8,
-  },
-  weatherCard: {
-    backgroundColor: 'rgba(255,255,255,0.15)',
-    borderRadius: 16,
-    padding: 24,
-    marginBottom: 16,
-    alignItems: 'center',
-    position: 'relative',
-  },
-  temp: {
-    fontSize: 32,
-    fontWeight: '200',
-    color: '#fff',
-    marginVertical: 8,
-  },
-  detailsCard: {
-    backgroundColor: 'rgba(255, 255, 255, 0.12)',
-    borderRadius: 16,
-    padding: 16,
-    marginBottom: 16,
-  },
-  cardSectionTitle: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#fff',
-    marginBottom: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: 'rgba(255, 255, 255, 0.2)',
-    paddingBottom: 4,
-  },
-  gridRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 12,
-  },
-  gridItem: {
-    flex: 1,
     marginRight: 8,
   },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.6)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 20,
-  },
-  modalContent: {
-    width: '100%',
-    height: '80%',
-    backgroundColor: '#fff',
-    borderRadius: 16,
-    padding: 16,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 5,
-  },
-  modalHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#eee',
-    paddingBottom: 8,
-  },
-  modalTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#333',
+  copyButtonText: {
+    fontSize: 13,
+    color: '#007aff',
+    fontWeight: '600',
   },
   closeButton: {
     padding: 4,
   },
   jsonScrollView: {
     flex: 1,
-    backgroundColor: '#1e1e1e',
-    borderRadius: 8,
+    backgroundColor: '#0f172a',
+    borderRadius: 10,
     padding: 12,
   },
   jsonText: {
     fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
     fontSize: 12,
-    color: '#a9ffaf',
-  },
-  content: {
-    padding: 20,
-    paddingTop: Platform.OS === 'android' ? 50 : 60,
-    paddingBottom: 40,
-  },
-  title: {
-    fontSize: 28,
-    fontWeight: 'bold',
-    marginBottom: 20,
-  },
-  errorBox: {
-    backgroundColor: 'rgba(214, 48, 49, 0.9)',
-    borderRadius: 10,
-    padding: 12,
-    marginBottom: 16,
-  },
-  errorText: {
-    color: '#fff',
-    fontSize: 14,
-  },
-  emptyStateCard: {
-    backgroundColor: 'rgba(255,255,255,0.1)',
-    borderRadius: 12,
-    padding: 24,
-    marginBottom: 16,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  emptyStateTitle: {
-    color: '#fff',
-    fontSize: 18,
-    fontWeight: 'bold',
-    marginBottom: 8,
-    textAlign: 'center',
-  },
-  emptyStateText: {
-    color: 'rgba(255,255,255,0.8)',
-    fontSize: 15,
-    textAlign: 'center',
-    lineHeight: 22,
-  },
-  cityName: {
-    fontSize: 22,
-    fontWeight: 'bold',
-    color: '#fff',
-  },
-  region: {
-    fontSize: 14,
-    color: 'rgba(255,255,255,0.7)',
-    marginBottom: 12,
-  },
-  condition: {
-    fontSize: 18,
-    color: 'rgba(255,255,255,0.9)',
-    marginTop: 4,
-    marginBottom: 20,
-  },
-  detailsRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    width: '100%',
-  },
-  detailItem: {
-    alignItems: 'center',
-  },
-  detailLabel: {
-    fontSize: 12,
-    color: 'rgba(255,255,255,0.6)',
-    marginBottom: 4,
-  },
-  detailValue: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#fff',
-  },
-  forecastCard: {
-    backgroundColor: 'rgba(255,255,255,0.1)',
-    borderRadius: 16,
-    padding: 16,
-    marginBottom: 16,
-  },
-  forecastTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#fff',
-    marginBottom: 12,
-  },
-  forecastRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: 'rgba(255,255,255,0.2)',
-  },
-  forecastDay: {
-    fontSize: 16,
-    color: '#fff',
-    width: 60,
-  },
-  forecastCond: {
-    flex: 1,
-    fontSize: 14,
-    color: 'rgba(255,255,255,0.8)',
-    textAlign: 'center',
-  },
-  forecastTemp: {
-    fontSize: 16,
-    color: '#fff',
-    fontWeight: '500',
-    width: 70,
-    textAlign: 'right',
-  },
-  alertCard: {
-    backgroundColor: 'rgba(255, 165, 0, 0.9)',
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 16,
-  },
-  alertTitle: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#fff',
-    marginBottom: 8,
-  },
-  alertText: {
-    fontSize: 15,
-    color: '#fff',
-  },
-  apiAlert: {
-    marginTop: 8,
-    paddingTop: 8,
-    borderTopWidth: 1,
-    borderTopColor: 'rgba(255,255,255,0.3)',
-  },
-  alertDesc: {
-    fontSize: 13,
-    color: 'rgba(255,255,255,0.85)',
-    marginTop: 4,
-  },
-  statusRow: {
-    marginTop: 20,
-    alignItems: 'center',
-  },
-  serviceStatus: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: 8,
-  },
-  statusDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    marginRight: 8,
-  },
-  statusText: {
-    fontSize: 13,
-    opacity: 0.8,
+    color: '#38ef7d',
   },
 });
