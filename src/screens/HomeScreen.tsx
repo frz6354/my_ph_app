@@ -13,6 +13,7 @@ import {
   Image,
   Alert,
   TextInput,
+  ActivityIndicator,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -21,6 +22,7 @@ import {
   getZipCodes,
   getCityList,
   saveCityList,
+  addZipCode,
   removeZipCode,
   getDefaultZipCode,
   getWeatherMap,
@@ -46,8 +48,6 @@ interface Props {
   navigation?: HomeScreenNavigationProp;
 }
 
-const DEFAULT_CITIES = ['Prague', 'London', 'Tokyo', 'New York'];
-
 export default function HomeScreen({ navigation }: Props) {
   const insets = useSafeAreaInsets();
   const [cityList, setCityList] = useState<string[]>([]);
@@ -56,6 +56,7 @@ export default function HomeScreen({ navigation }: Props) {
   const [weatherMap, setWeatherMap] = useState<Record<string, WeatherResponse>>({});
 
   const [searchQuery, setSearchQuery] = useState('');
+  const [addCityInput, setAddCityInput] = useState('');
   const [selectedCity, setSelectedCity] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<'grid' | 'detail'>('grid');
 
@@ -64,6 +65,7 @@ export default function HomeScreen({ navigation }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [modalVisible, setModalVisible] = useState(false);
   const [loadingSearch, setLoadingSearch] = useState(false);
+  const [savingCity, setSavingCity] = useState(false);
 
   const hourlyScrollRef = useRef<ScrollView>(null);
 
@@ -106,12 +108,12 @@ export default function HomeScreen({ navigation }: Props) {
 
   const handleDeleteCity = (cityKey: string) => {
     Alert.alert(
-      'Delete City',
-      `Are you sure you want to remove ${cityKey}?`,
+      'Remove City',
+      `Are you sure you want to remove ${cityKey} from saved cities?`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
-          text: 'Delete',
+          text: 'Remove',
           style: 'destructive',
           onPress: async () => {
             await removeZipCode(cityKey);
@@ -121,6 +123,26 @@ export default function HomeScreen({ navigation }: Props) {
         },
       ]
     );
+  };
+
+  const handleAddCityDirect = async () => {
+    const trimmed = addCityInput.trim();
+    if (!trimmed) return;
+    setSavingCity(true);
+    try {
+      const weather = await fetchWeather(trimmed);
+      const officialName = weather.location.name;
+      await addZipCode(officialName);
+      setWeatherMap((prev) => ({ ...prev, [officialName]: weather }));
+      setAddCityInput('');
+      await loadData();
+      DeviceEventEmitter.emit('zip_changed');
+      Alert.alert('Saved', `${officialName} added to your cities!`);
+    } catch (e: any) {
+      Alert.alert('Error', e.message === 'pls update key' ? 'Please update API key in Settings' : 'Location not found.');
+    } finally {
+      setSavingCity(false);
+    }
   };
 
   useEffect(() => {
@@ -186,6 +208,26 @@ export default function HomeScreen({ navigation }: Props) {
   // Determine active city data for detail view
   const activeCityKey = selectedCity || defaultZip || (Object.keys(weatherMap).length > 0 ? Object.keys(weatherMap)[0] : 'London');
   const activeWeather = weatherMap[activeCityKey] || weatherMap[Object.keys(weatherMap)[0]];
+  const isCitySaved = cityList.some(c => c.toLowerCase() === activeCityKey?.toLowerCase());
+
+  const handleToggleSaveActiveCity = async () => {
+    if (!activeCityKey) return;
+    if (isCitySaved) {
+      handleDeleteCity(activeCityKey);
+    } else {
+      try {
+        setSavingCity(true);
+        await addZipCode(activeCityKey);
+        await loadData();
+        DeviceEventEmitter.emit('zip_changed');
+        Alert.alert('Saved', `${activeCityKey} saved to your cities!`);
+      } catch (e: any) {
+        Alert.alert('Error', 'Could not save city.');
+      } finally {
+        setSavingCity(false);
+      }
+    }
+  };
 
   const copyToClipboard = async () => {
     if (activeWeather) {
@@ -243,19 +285,25 @@ export default function HomeScreen({ navigation }: Props) {
         <View style={styles.header}>
           <View style={styles.headerTitleRow}>
             <Text style={styles.appTitle}>Meteo</Text>
-            <TouchableOpacity
-              style={styles.toggleViewBtn}
-              onPress={() => setViewMode(viewMode === 'grid' ? 'detail' : 'grid')}
-            >
-              <Ionicons
-                name={viewMode === 'grid' ? 'grid' : 'list'}
-                size={20}
-                color="#fff"
-              />
-              <Text style={styles.toggleViewText}>
-                {viewMode === 'grid' ? 'Overview' : 'Detail'}
-              </Text>
-            </TouchableOpacity>
+            <View style={styles.headerRightControls}>
+              {viewMode === 'detail' && (
+                <TouchableOpacity
+                  style={styles.allCitiesPillBtn}
+                  onPress={() => setViewMode('grid')}
+                >
+                  <Ionicons name="chevron-back" size={18} color="#fff" />
+                  <Text style={styles.allCitiesPillText}>All Cities</Text>
+                </TouchableOpacity>
+              )}
+              {navigation && (
+                <TouchableOpacity
+                  style={styles.settingsIconBtn}
+                  onPress={() => navigation.navigate('Settings')}
+                >
+                  <Ionicons name="settings-outline" size={22} color="#fff" />
+                </TouchableOpacity>
+              )}
+            </View>
           </View>
 
           {/* Glass Search Bar */}
@@ -271,13 +319,24 @@ export default function HomeScreen({ navigation }: Props) {
               returnKeyType="search"
             />
             {loadingSearch ? (
-              <Ionicons name="reload-outline" size={18} color="#fff" style={{ marginLeft: 6 }} />
+              <ActivityIndicator size="small" color="#fff" style={{ marginLeft: 6 }} />
             ) : searchQuery.length > 0 ? (
               <TouchableOpacity onPress={() => setSearchQuery('')}>
                 <Ionicons name="close-circle" size={18} color="rgba(255,255,255,0.6)" />
               </TouchableOpacity>
             ) : null}
           </View>
+
+          {/* Sub-header All Cities back button in detail mode */}
+          {viewMode === 'detail' && (
+            <TouchableOpacity
+              style={styles.subHeaderBackBtn}
+              onPress={() => setViewMode('grid')}
+            >
+              <Ionicons name="chevron-back" size={18} color="#fff" />
+              <Text style={styles.subHeaderBackText}>All Cities</Text>
+            </TouchableOpacity>
+          )}
         </View>
 
         {error && (
@@ -287,10 +346,45 @@ export default function HomeScreen({ navigation }: Props) {
           </View>
         )}
 
-        {/* ==================== VIEW MODE: OVERVIEW GRID ==================== */}
+        {/* ==================== VIEW MODE: OVERVIEW GRID (ALL CITIES) ==================== */}
         {viewMode === 'grid' ? (
           <View style={styles.gridSection}>
-            <Text style={styles.sectionHeaderTitle}>Weather Locations</Text>
+            {/* Quick Add / Save City Section */}
+            <View style={styles.addCityCard}>
+              <Text style={styles.addCityTitle}>Add New City</Text>
+              <View style={styles.addCityInputRow}>
+                <TextInput
+                  style={styles.addCityInput}
+                  placeholder="Enter city name or zip code..."
+                  placeholderTextColor="rgba(255, 255, 255, 0.5)"
+                  value={addCityInput}
+                  onChangeText={setAddCityInput}
+                  onSubmitEditing={handleAddCityDirect}
+                  returnKeyType="done"
+                  editable={!savingCity}
+                />
+                <TouchableOpacity
+                  style={[styles.addCityBtn, savingCity && styles.addCityBtnDisabled]}
+                  onPress={handleAddCityDirect}
+                  disabled={savingCity}
+                >
+                  {savingCity ? (
+                    <ActivityIndicator color="#fff" size="small" />
+                  ) : (
+                    <>
+                      <Ionicons name="add-circle-outline" size={18} color="#fff" style={{ marginRight: 4 }} />
+                      <Text style={styles.addCityBtnText}>Save</Text>
+                    </>
+                  )}
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            <View style={styles.sectionTitleRow}>
+              <Text style={styles.sectionHeaderTitle}>Saved Cities</Text>
+              <Text style={styles.sectionHeaderCount}>{cityList.length} saved</Text>
+            </View>
+
             <View style={styles.cityGrid}>
               {cityList.map((cityKey: string, index: number) => {
                 const w = weatherMap[cityKey];
@@ -312,7 +406,7 @@ export default function HomeScreen({ navigation }: Props) {
                           {w?.location?.name || cityKey}
                         </Text>
                         <Text style={styles.citySubtext} numberOfLines={1}>
-                          {w?.location?.country || 'Location'}
+                          {w?.location?.country || 'Saved Location'}
                         </Text>
                       </View>
                       <View style={styles.cardActionRow}>
@@ -385,19 +479,27 @@ export default function HomeScreen({ navigation }: Props) {
           /* ==================== VIEW MODE: CITY DETAIL ==================== */
           activeWeather && (
             <View style={styles.detailSection}>
-              {/* Back to grid button */}
-              <TouchableOpacity
-                style={styles.backGridBtn}
-                onPress={() => setViewMode('grid')}
-              >
-                <Ionicons name="chevron-back" size={18} color="#fff" />
-                <Text style={styles.backGridText}>All Cities</Text>
-              </TouchableOpacity>
-
               {/* Hero Main Weather Card */}
               <View style={styles.heroCard}>
                 <View style={styles.heroLeft}>
-                  <Text style={styles.heroCity}>{activeWeather.location.name}</Text>
+                  <View style={styles.heroCityHeaderRow}>
+                    <Text style={styles.heroCity}>{activeWeather.location.name}</Text>
+                    <TouchableOpacity
+                      style={[styles.saveCityPill, isCitySaved ? styles.saveCityPillSaved : styles.saveCityPillAdd]}
+                      onPress={handleToggleSaveActiveCity}
+                      disabled={savingCity}
+                    >
+                      <Ionicons
+                        name={isCitySaved ? "bookmark" : "bookmark-outline"}
+                        size={14}
+                        color="#fff"
+                        style={{ marginRight: 4 }}
+                      />
+                      <Text style={styles.saveCityPillText}>
+                        {isCitySaved ? 'Saved' : 'Save City'}
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
                   <Text style={styles.heroCountry}>
                     {activeWeather.location.region ? `${activeWeather.location.region}, ` : ''}
                     {activeWeather.location.country}
@@ -451,7 +553,6 @@ export default function HomeScreen({ navigation }: Props) {
                     style={styles.hourlyScroll}
                     onLayout={() => {
                       const currentHour = new Date().getHours();
-                      // Each hourly item has minWidth 58 + marginRight 16 + paddingHorizontal (total ~74px width)
                       const itemWidth = 74;
                       hourlyScrollRef.current?.scrollTo({
                         x: currentHour * itemWidth,
@@ -524,7 +625,6 @@ export default function HomeScreen({ navigation }: Props) {
                             />
                           )}
                           <Text style={styles.dailyMin}>{min}°</Text>
-                          {/* Color bar representing temperature scale */}
                           <View style={styles.tempBarTrack}>
                             <View style={[styles.tempBarFill, { left: '15%', right: '20%' }]} />
                           </View>
@@ -790,7 +890,12 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     letterSpacing: -0.5,
   },
-  toggleViewBtn: {
+  headerRightControls: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  allCitiesPillBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: 'rgba(255, 255, 255, 0.12)',
@@ -800,11 +905,36 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(255, 255, 255, 0.2)',
   },
-  toggleViewText: {
+  allCitiesPillText: {
     color: '#ffffff',
     fontSize: 13,
     fontWeight: '600',
-    marginLeft: 6,
+    marginLeft: 2,
+  },
+  settingsIconBtn: {
+    backgroundColor: 'rgba(255, 255, 255, 0.12)',
+    padding: 8,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.2)',
+  },
+  subHeaderBackBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    backgroundColor: 'rgba(255, 255, 255, 0.12)',
+    paddingVertical: 6,
+    paddingHorizontal: 14,
+    borderRadius: 20,
+    marginTop: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.2)',
+  },
+  subHeaderBackText: {
+    color: '#ffffff',
+    fontSize: 14,
+    fontWeight: '600',
+    marginLeft: 4,
   },
   searchBar: {
     flexDirection: 'row',
@@ -822,6 +952,50 @@ const styles = StyleSheet.create({
     fontSize: 15,
     padding: 0,
   },
+  addCityCard: {
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+    borderRadius: 20,
+    padding: 16,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.12)',
+  },
+  addCityTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#ffffff',
+    marginBottom: 10,
+  },
+  addCityInputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  addCityInput: {
+    flex: 1,
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    fontSize: 14,
+    color: '#ffffff',
+    marginRight: 10,
+  },
+  addCityBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#00b894',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 12,
+  },
+  addCityBtnDisabled: {
+    opacity: 0.6,
+  },
+  addCityBtnText: {
+    color: '#ffffff',
+    fontWeight: '700',
+    fontSize: 14,
+  },
   errorBox: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -835,11 +1009,20 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
   },
+  sectionTitleRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
   sectionHeaderTitle: {
     fontSize: 18,
     fontWeight: '700',
     color: '#ffffff',
-    marginBottom: 14,
+  },
+  sectionHeaderCount: {
+    fontSize: 13,
+    color: 'rgba(255, 255, 255, 0.5)',
   },
   gridSection: {
     marginBottom: 20,
@@ -925,40 +1108,49 @@ const styles = StyleSheet.create({
   detailSection: {
     marginBottom: 20,
   },
-  backGridBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    alignSelf: 'flex-start',
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    borderRadius: 16,
-    marginBottom: 14,
-  },
-  backGridText: {
-    color: '#ffffff',
-    fontSize: 13,
-    fontWeight: '600',
-    marginLeft: 2,
-  },
   heroCard: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
     backgroundColor: 'rgba(255, 255, 255, 0.08)',
     borderRadius: 24,
     padding: 24,
     marginBottom: 16,
     borderWidth: 1,
     borderColor: 'rgba(255, 255, 255, 0.15)',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
   },
   heroLeft: {
     flex: 1,
+  },
+  heroCityHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 4,
   },
   heroCity: {
     fontSize: 26,
     fontWeight: '800',
     color: '#ffffff',
+  },
+  saveCityPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 4,
+    paddingHorizontal: 10,
+    borderRadius: 12,
+  },
+  saveCityPillAdd: {
+    backgroundColor: '#00b894',
+  },
+  saveCityPillSaved: {
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+  },
+  saveCityPillText: {
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: '700',
   },
   heroCountry: {
     fontSize: 13,

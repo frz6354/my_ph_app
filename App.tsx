@@ -2,22 +2,19 @@ import 'react-native-gesture-handler';
 import React, { useEffect, useState } from 'react';
 import { Platform, Alert, View, Text, StyleSheet, ActivityIndicator, TouchableOpacity, StatusBar } from 'react-native';
 import notifee, { AuthorizationStatus } from '@notifee/react-native';
-import { NavigationContainer, DrawerActions } from '@react-navigation/native';
+import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
-import { createDrawerNavigator } from '@react-navigation/drawer';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import HomeScreen from './src/screens/HomeScreen';
 import SettingsScreen from './src/screens/SettingsScreen';
 import TodoScreen from './src/screens/TodoScreen';
-import ZipCodeDrawer from './src/screens/ZipCodeDrawer';
 import { createNotificationChannels } from './src/services/notifications';
 import { startForegroundService, getDefaultZipCode, initBackgroundFetch } from './src/tasks/weatherTask';
 
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
-const Drawer = createDrawerNavigator();
 
 function WeatherStack() {
   return (
@@ -27,16 +24,7 @@ function WeatherStack() {
         component={HomeScreen}
         options={({ navigation }) => ({
           title: 'Weather',
-          headerLeft: () => (
-            <TouchableOpacity onPress={() => navigation.dispatch(DrawerActions.toggleDrawer())} style={{ marginLeft: 10 }}>
-              <Ionicons name="menu" size={24} color="#0984e3" />
-            </TouchableOpacity>
-          ),
-          headerRight: () => (
-            <TouchableOpacity onPress={() => navigation.navigate('Settings')}>
-              <Text style={{ color: '#0984e3', fontWeight: 'bold', marginRight: 10 }}>Settings</Text>
-            </TouchableOpacity>
-          ),
+          headerShown: false,
         })}
       />
       <Stack.Screen
@@ -45,18 +33,6 @@ function WeatherStack() {
         options={{ title: 'Settings' }}
       />
     </Stack.Navigator>
-  );
-}
-
-function WeatherDrawer() {
-  return (
-    <Drawer.Navigator drawerContent={(props) => <ZipCodeDrawer {...props} />}>
-      <Drawer.Screen
-        name="HomeDrawer"
-        component={WeatherStack}
-        options={{ headerShown: false }}
-      />
-    </Drawer.Navigator>
   );
 }
 
@@ -131,7 +107,7 @@ export default function App() {
       >
         <Tab.Screen
           name="WeatherTab"
-          component={WeatherDrawer}
+          component={WeatherStack}
           options={{ title: 'Weather' }}
         />
         <Tab.Screen
