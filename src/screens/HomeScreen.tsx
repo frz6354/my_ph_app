@@ -12,8 +12,7 @@ import {
   TouchableOpacity,
   Image,
   Alert,
-  TextInput,
-  ActivityIndicator,
+
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -55,8 +54,7 @@ export default function HomeScreen({ navigation }: Props) {
   const [defaultZip, setDefaultZip] = useState<string | null>(null);
   const [weatherMap, setWeatherMap] = useState<Record<string, WeatherResponse>>({});
 
-  const [searchQuery, setSearchQuery] = useState('');
-  const [addCityInput, setAddCityInput] = useState('');
+
   const [selectedCity, setSelectedCity] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<'grid' | 'detail'>('grid');
 
@@ -64,7 +62,7 @@ export default function HomeScreen({ navigation }: Props) {
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [modalVisible, setModalVisible] = useState(false);
-  const [loadingSearch, setLoadingSearch] = useState(false);
+
   const [savingCity, setSavingCity] = useState(false);
 
   const hourlyScrollRef = useRef<ScrollView>(null);
@@ -213,24 +211,6 @@ export default function HomeScreen({ navigation }: Props) {
     }
   }, []);
 
-  const handleSearch = async () => {
-    if (!searchQuery.trim()) return;
-    setLoadingSearch(true);
-    setError(null);
-    try {
-      const query = searchQuery.trim();
-      const weather = await fetchWeather(query);
-      const cityName = weather.location.name;
-      setWeatherMap((prev: Record<string, WeatherResponse>) => ({ ...prev, [cityName]: weather }));
-      setSelectedCity(cityName);
-      setViewMode('detail');
-      setSearchQuery('');
-    } catch (e: any) {
-      Alert.alert('Search Error', e.message || 'Location not found.');
-    } finally {
-      setLoadingSearch(false);
-    }
-  };
 
 
   const copyToClipboard = async () => {
@@ -278,59 +258,20 @@ export default function HomeScreen({ navigation }: Props) {
         {/* Top Header */}
         <View style={styles.header}>
           <View style={styles.headerTitleRow}>
-            <Text style={styles.appTitle}>Meteo</Text>
-            <View style={styles.headerRightControls}>
-              {viewMode === 'detail' && (
-                <TouchableOpacity
-                  style={styles.allCitiesPillBtn}
-                  onPress={() => setViewMode('grid')}
-                >
-                  <Ionicons name="chevron-back" size={18} color="#fff" />
-                  <Text style={styles.allCitiesPillText}>All Cities</Text>
-                </TouchableOpacity>
-              )}
-              {navigation && (
-                <TouchableOpacity
-                  style={styles.settingsIconBtn}
-                  onPress={() => navigation.navigate('Settings')}
-                >
-                  <Ionicons name="settings-outline" size={22} color="#fff" />
-                </TouchableOpacity>
-              )}
-            </View>
-          </View>
-
-          {/* Glass Search Bar */}
-          <View style={styles.searchBar}>
-            <Ionicons name="search-outline" size={18} color="rgba(255, 255, 255, 0.6)" style={{ marginRight: 8 }} />
-            <TextInput
-              style={styles.searchInput}
-              placeholder="Search for a city or airport"
-              placeholderTextColor="rgba(255, 255, 255, 0.5)"
-              value={searchQuery}
-              onChangeText={setSearchQuery}
-              onSubmitEditing={handleSearch}
-              returnKeyType="search"
-            />
-            {loadingSearch ? (
-              <ActivityIndicator size="small" color="#fff" style={{ marginLeft: 6 }} />
-            ) : searchQuery.length > 0 ? (
-              <TouchableOpacity onPress={() => setSearchQuery('')}>
-                <Ionicons name="close-circle" size={18} color="rgba(255,255,255,0.6)" />
-              </TouchableOpacity>
-            ) : null}
-          </View>
-
-          {/* Sub-header All Cities back button in detail mode */}
-          {viewMode === 'detail' && (
             <TouchableOpacity
-              style={styles.subHeaderBackBtn}
-              onPress={() => setViewMode('grid')}
+              style={styles.toggleViewBtn}
+              onPress={() => setViewMode(viewMode === 'grid' ? 'detail' : 'grid')}
             >
-              <Ionicons name="chevron-back" size={18} color="#fff" />
-              <Text style={styles.subHeaderBackText}>All Cities</Text>
+              <Ionicons
+                name={viewMode === 'grid' ? 'grid' : 'list'}
+                size={20}
+                color="#fff"
+              />
+              <Text style={styles.toggleViewText}>
+                {viewMode === 'grid' ? 'Overview' : 'Detail'}
+              </Text>
             </TouchableOpacity>
-          )}
+          </View>
         </View>
 
         {error && (
@@ -343,36 +284,6 @@ export default function HomeScreen({ navigation }: Props) {
         {/* ==================== VIEW MODE: OVERVIEW GRID (ALL CITIES) ==================== */}
         {viewMode === 'grid' ? (
           <View style={styles.gridSection}>
-            {/* Quick Add / Save City Section */}
-            <View style={styles.addCityCard}>
-              <Text style={styles.addCityTitle}>Add New City</Text>
-              <View style={styles.addCityInputRow}>
-                <TextInput
-                  style={styles.addCityInput}
-                  placeholder="Enter city name or zip code..."
-                  placeholderTextColor="rgba(255, 255, 255, 0.5)"
-                  value={addCityInput}
-                  onChangeText={setAddCityInput}
-                  onSubmitEditing={handleAddCityDirect}
-                  returnKeyType="done"
-                  editable={!savingCity}
-                />
-                <TouchableOpacity
-                  style={[styles.addCityBtn, savingCity && styles.addCityBtnDisabled]}
-                  onPress={handleAddCityDirect}
-                  disabled={savingCity}
-                >
-                  {savingCity ? (
-                    <ActivityIndicator color="#fff" size="small" />
-                  ) : (
-                    <>
-                      <Ionicons name="add-circle-outline" size={18} color="#fff" style={{ marginRight: 4 }} />
-                      <Text style={styles.addCityBtnText}>Save</Text>
-                    </>
-                  )}
-                </TouchableOpacity>
-              </View>
-            </View>
 
             <View style={styles.sectionTitleRow}>
               <Text style={styles.sectionHeaderTitle}>Saved Cities</Text>
@@ -886,18 +797,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 12,
   },
-  appTitle: {
-    fontSize: 32,
-    fontWeight: '800',
-    color: '#ffffff',
-    letterSpacing: -0.5,
-  },
-  headerRightControls: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  allCitiesPillBtn: {
+  toggleViewBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: 'rgba(255, 255, 255, 0.12)',
@@ -938,66 +838,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     marginLeft: 4,
   },
-  searchBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(255, 255, 255, 0.08)',
-    borderRadius: 22,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.15)',
-  },
-  searchInput: {
-    flex: 1,
-    color: '#ffffff',
-    fontSize: 15,
-    padding: 0,
-  },
-  addCityCard: {
-    backgroundColor: 'rgba(255, 255, 255, 0.08)',
-    borderRadius: 20,
-    padding: 16,
-    marginBottom: 16,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.12)',
-  },
-  addCityTitle: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: '#ffffff',
-    marginBottom: 10,
-  },
-  addCityInputRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  addCityInput: {
-    flex: 1,
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
-    borderRadius: 12,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    fontSize: 14,
-    color: '#ffffff',
-    marginRight: 10,
-  },
-  addCityBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#00b894',
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: 12,
-  },
-  addCityBtnDisabled: {
-    opacity: 0.6,
-  },
-  addCityBtnText: {
-    color: '#ffffff',
-    fontWeight: '700',
-    fontSize: 14,
-  },
+
   errorBox: {
     flexDirection: 'row',
     alignItems: 'center',
