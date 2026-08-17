@@ -28,8 +28,12 @@ function WeatherStack() {
         options={({ navigation }) => ({
           title: 'Weather',
           headerLeft: () => (
-            <TouchableOpacity onPress={() => navigation.dispatch(DrawerActions.toggleDrawer())} style={{ marginLeft: 10 }}>
-              <Ionicons name="menu" size={24} color="#0984e3" />
+            <TouchableOpacity
+              onPress={() => navigation.dispatch(DrawerActions.toggleDrawer())}
+              style={{ marginLeft: 10, flexDirection: 'row', alignItems: 'center' }}
+            >
+              <Ionicons name="menu" size={22} color="#0984e3" style={{ marginRight: 4 }} />
+              <Text style={{ color: '#0984e3', fontWeight: 'bold' }}>All Cities</Text>
             </TouchableOpacity>
           ),
           headerRight: () => (

@@ -12,7 +12,6 @@ import {
   TouchableOpacity,
   Image,
   Alert,
-  TextInput,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -242,7 +241,6 @@ export default function HomeScreen({ navigation }: Props) {
         {/* Top Header */}
         <View style={styles.header}>
           <View style={styles.headerTitleRow}>
-            <Text style={styles.appTitle}>Meteo</Text>
             <TouchableOpacity
               style={styles.toggleViewBtn}
               onPress={() => setViewMode(viewMode === 'grid' ? 'detail' : 'grid')}
@@ -256,27 +254,6 @@ export default function HomeScreen({ navigation }: Props) {
                 {viewMode === 'grid' ? 'Overview' : 'Detail'}
               </Text>
             </TouchableOpacity>
-          </View>
-
-          {/* Glass Search Bar */}
-          <View style={styles.searchBar}>
-            <Ionicons name="search-outline" size={18} color="rgba(255, 255, 255, 0.6)" style={{ marginRight: 8 }} />
-            <TextInput
-              style={styles.searchInput}
-              placeholder="Search for a city or airport"
-              placeholderTextColor="rgba(255, 255, 255, 0.5)"
-              value={searchQuery}
-              onChangeText={setSearchQuery}
-              onSubmitEditing={handleSearch}
-              returnKeyType="search"
-            />
-            {loadingSearch ? (
-              <Ionicons name="reload-outline" size={18} color="#fff" style={{ marginLeft: 6 }} />
-            ) : searchQuery.length > 0 ? (
-              <TouchableOpacity onPress={() => setSearchQuery('')}>
-                <Ionicons name="close-circle" size={18} color="rgba(255,255,255,0.6)" />
-              </TouchableOpacity>
-            ) : null}
           </View>
         </View>
 
@@ -385,15 +362,6 @@ export default function HomeScreen({ navigation }: Props) {
           /* ==================== VIEW MODE: CITY DETAIL ==================== */
           activeWeather && (
             <View style={styles.detailSection}>
-              {/* Back to grid button */}
-              <TouchableOpacity
-                style={styles.backGridBtn}
-                onPress={() => setViewMode('grid')}
-              >
-                <Ionicons name="chevron-back" size={18} color="#fff" />
-                <Text style={styles.backGridText}>All Cities</Text>
-              </TouchableOpacity>
-
               {/* Hero Main Weather Card */}
               <View style={styles.heroCard}>
                 <View style={styles.heroLeft}>
