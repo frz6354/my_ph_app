@@ -232,6 +232,7 @@ export default function HomeScreen({ navigation }: Props) {
     }
   };
 
+
   const copyToClipboard = async () => {
     if (activeWeather) {
       await Clipboard.setStringAsync(JSON.stringify(activeWeather, null, 2));
