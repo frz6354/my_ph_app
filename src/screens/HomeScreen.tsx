@@ -12,6 +12,7 @@ import {
   TouchableOpacity,
   Image,
   Alert,
+
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -53,6 +54,7 @@ export default function HomeScreen({ navigation }: Props) {
   const [defaultZip, setDefaultZip] = useState<string | null>(null);
   const [weatherMap, setWeatherMap] = useState<Record<string, WeatherResponse>>({});
 
+
   const [selectedCity, setSelectedCity] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<'grid' | 'detail'>('grid');
 
@@ -60,9 +62,35 @@ export default function HomeScreen({ navigation }: Props) {
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [modalVisible, setModalVisible] = useState(false);
+
   const [savingCity, setSavingCity] = useState(false);
 
   const hourlyScrollRef = useRef<ScrollView>(null);
+
+  // Determine active city data for detail view
+  const activeCityKey = selectedCity || defaultZip || (Object.keys(weatherMap).length > 0 ? Object.keys(weatherMap)[0] : 'London');
+  const activeWeather = weatherMap[activeCityKey] || weatherMap[Object.keys(weatherMap)[0]];
+
+  const isCitySaved = cityList.some(c => c.toLowerCase() === activeCityKey?.toLowerCase());
+
+  const handleToggleSaveActiveCity = async () => {
+    if (!activeCityKey) return;
+    if (isCitySaved) {
+      handleDeleteCity(activeCityKey);
+    } else {
+      try {
+        setSavingCity(true);
+        await addZipCode(activeCityKey);
+        await loadData();
+        DeviceEventEmitter.emit('zip_changed');
+        Alert.alert('Saved', `${activeCityKey} saved to your cities!`);
+      } catch (e: any) {
+        Alert.alert('Error', 'Could not save city.');
+      } finally {
+        setSavingCity(false);
+      }
+    }
+  };
 
   const loadData = async () => {
     const cities = await getCityList();
@@ -120,6 +148,26 @@ export default function HomeScreen({ navigation }: Props) {
     );
   };
 
+  const handleAddCityDirect = async () => {
+    const trimmed = addCityInput.trim();
+    if (!trimmed) return;
+    setSavingCity(true);
+    try {
+      const weather = await fetchWeather(trimmed);
+      const officialName = weather.location.name;
+      await addZipCode(officialName);
+      setWeatherMap((prev) => ({ ...prev, [officialName]: weather }));
+      setAddCityInput('');
+      await loadData();
+      DeviceEventEmitter.emit('zip_changed');
+      Alert.alert('Saved', `${officialName} added to your cities!`);
+    } catch (e: any) {
+      Alert.alert('Error', e.message === 'pls update key' ? 'Please update API key in Settings' : 'Location not found.');
+    } finally {
+      setSavingCity(false);
+    }
+  };
+
   useEffect(() => {
     loadData();
     const subscription = DeviceEventEmitter.addListener('zip_changed', () => {
@@ -155,35 +203,15 @@ export default function HomeScreen({ navigation }: Props) {
     } catch (e: any) {
       if (e.message === 'pls update key') {
         setError('pls update key');
+      } else {
+        setError(e.message || 'Error updating weather');
       }
     } finally {
       setRefreshing(false);
     }
   }, []);
 
-  // Determine active city data for detail view
-  const activeCityKey = selectedCity || defaultZip || (Object.keys(weatherMap).length > 0 ? Object.keys(weatherMap)[0] : 'London');
-  const activeWeather = weatherMap[activeCityKey] || weatherMap[Object.keys(weatherMap)[0]];
-  const isCitySaved = cityList.some(c => c.toLowerCase() === activeCityKey?.toLowerCase());
 
-  const handleToggleSaveActiveCity = async () => {
-    if (!activeCityKey) return;
-    if (isCitySaved) {
-      handleDeleteCity(activeCityKey);
-    } else {
-      try {
-        setSavingCity(true);
-        await addZipCode(activeCityKey);
-        await loadData();
-        DeviceEventEmitter.emit('zip_changed');
-        Alert.alert('Saved', `${activeCityKey} saved to your cities!`);
-      } catch (e: any) {
-        Alert.alert('Error', 'Could not save city.');
-      } finally {
-        setSavingCity(false);
-      }
-    }
-  };
 
   const copyToClipboard = async () => {
     if (activeWeather) {
@@ -208,24 +236,14 @@ export default function HomeScreen({ navigation }: Props) {
   };
 
   // AQI US EPA category helper
-  const getAqiCategory = (epaIndex?: number) => {
-    if (!epaIndex) return { status: 'Good (N/A)', desc: 'Air quality is satisfactory.' };
-    switch (epaIndex) {
-      case 1:
-        return { status: '1 - Good', desc: 'Air quality is satisfactory, poses little/no risk.' };
-      case 2:
-        return { status: '2 - Moderate', desc: 'Air quality is acceptable for most people.' };
-      case 3:
-        return { status: '3 - Unhealthy for Sensitive Groups', desc: 'Sensitive individuals may experience health effects.' };
-      case 4:
-        return { status: '4 - Unhealthy', desc: 'Everyone may begin to experience health effects.' };
-      case 5:
-        return { status: '5 - Very Unhealthy', desc: 'Health alert: risk of health effects for everyone.' };
-      case 6:
-        return { status: '6 - Hazardous', desc: 'Health warning of emergency conditions.' };
-      default:
-        return { status: `${epaIndex}`, desc: 'Air quality data available.' };
-    }
+  const getAqiCategory = (usAqi?: number) => {
+    if (usAqi === undefined) return { status: 'N/A', desc: 'Air quality data unavailable.' };
+    if (usAqi <= 50) return { status: `${usAqi} - Good`, desc: 'Air quality is satisfactory, poses little/no risk.' };
+    if (usAqi <= 100) return { status: `${usAqi} - Moderate`, desc: 'Air quality is acceptable for most people.' };
+    if (usAqi <= 150) return { status: `${usAqi} - Unhealthy for Sensitive Groups`, desc: 'Sensitive individuals may experience health effects.' };
+    if (usAqi <= 200) return { status: `${usAqi} - Unhealthy`, desc: 'Everyone may begin to experience health effects.' };
+    if (usAqi <= 300) return { status: `${usAqi} - Very Unhealthy`, desc: 'Health alert: risk of health effects for everyone.' };
+    return { status: `${usAqi} - Hazardous`, desc: 'Health warning of emergency conditions.' };
   };
 
   return (
@@ -266,6 +284,7 @@ export default function HomeScreen({ navigation }: Props) {
         {/* ==================== VIEW MODE: OVERVIEW GRID (ALL CITIES) ==================== */}
         {viewMode === 'grid' ? (
           <View style={styles.gridSection}>
+
             <View style={styles.sectionTitleRow}>
               <Text style={styles.sectionHeaderTitle}>Saved Cities</Text>
               <Text style={styles.sectionHeaderCount}>{cityList.length} saved</Text>
@@ -447,7 +466,7 @@ export default function HomeScreen({ navigation }: Props) {
                     }}
                   >
                     {activeWeather.forecast.forecastday[0].hour.map((h: HourlyWeather, idx: number) => {
-                      const timePart = h.time.split(' ')[1] || h.time;
+                      const timePart = h.time.includes('T') ? h.time.split('T')[1] : (h.time.split(' ')[1] || h.time);
                       const [hourStr] = timePart.split(':');
                       const hourInt = parseInt(hourStr, 10);
                       const currentLocalHour = new Date().getHours();
@@ -486,24 +505,26 @@ export default function HomeScreen({ navigation }: Props) {
                 </View>
               )}
 
-              {/* Multi-day Forecast Section */}
+              {/* Multi-day Forecast Section (Up to 16 Days) */}
               {activeWeather.forecast?.forecastday && (
                 <View style={styles.glassCard}>
                   <View style={styles.cardHeader}>
                     <Ionicons name="calendar-outline" size={18} color="rgba(255,255,255,0.7)" style={{ marginRight: 6 }} />
-                    <Text style={styles.cardHeaderTitle}>5-DAY FORECAST</Text>
+                    <Text style={styles.cardHeaderTitle}>
+                      {activeWeather.forecast.forecastday.length}-DAY FORECAST
+                    </Text>
                   </View>
 
                   <View style={styles.dailyList}>
-                    {activeWeather.forecast.forecastday.slice(0, 5).map((day: any, idx: number) => {
+                    {activeWeather.forecast.forecastday.map((day: any, idx: number) => {
                       const dayDate = new Date(day.date + 'T00:00:00');
-                      const dayName = idx === 0 ? 'Today' : dayDate.toLocaleDateString(undefined, { weekday: 'short' });
+                      const dayName = idx === 0 ? 'Today' : dayDate.toLocaleDateString(undefined, { weekday: 'short', month: 'numeric', day: 'numeric' });
                       const min = Math.round(day.day.mintemp_c);
                       const max = Math.round(day.day.maxtemp_c);
 
                       return (
                         <View key={idx} style={styles.dailyRow}>
-                          <Text style={styles.dailyDay}>{dayName}</Text>
+                          <Text style={styles.dailyDay} numberOfLines={1}>{dayName}</Text>
                           {day.day.condition?.icon && (
                             <Image
                               source={{ uri: `https:${day.day.condition.icon}` }}
@@ -554,10 +575,10 @@ export default function HomeScreen({ navigation }: Props) {
                   <Text style={styles.cardHeaderTitle}>AIR QUALITY (AQI)</Text>
                 </View>
                 <Text style={styles.aqiStatus}>
-                  {getAqiCategory(activeWeather.current.air_quality?.['us-epa-index']).status}
+                  {getAqiCategory(activeWeather.current.air_quality?.us_aqi).status}
                 </Text>
                 <Text style={styles.aqiDesc}>
-                  {getAqiCategory(activeWeather.current.air_quality?.['us-epa-index']).desc}
+                  {getAqiCategory(activeWeather.current.air_quality?.us_aqi).desc}
                 </Text>
 
                 {activeWeather.current.air_quality && (
@@ -578,6 +599,12 @@ export default function HomeScreen({ navigation }: Props) {
                       <Text style={styles.pollutantLabel}>O₃</Text>
                       <Text style={styles.pollutantValue}>
                         {Math.round(activeWeather.current.air_quality.o3 || 0)} µg/m³
+                      </Text>
+                    </View>
+                    <View style={styles.pollutantBadge}>
+                      <Text style={styles.pollutantLabel}>NO₂</Text>
+                      <Text style={styles.pollutantValue}>
+                        {Math.round(activeWeather.current.air_quality.no2 || 0)} µg/m³
                       </Text>
                     </View>
                   </View>
@@ -622,9 +649,9 @@ export default function HomeScreen({ navigation }: Props) {
                     <Ionicons name="speedometer-outline" size={16} color="rgba(255,255,255,0.7)" style={{ marginRight: 6 }} />
                     <Text style={styles.metricCardTitle}>PRESSURE</Text>
                   </View>
-                  <Text style={styles.metricValue}>{activeWeather.current.pressure_mb} hPa</Text>
+                  <Text style={styles.metricValue}>{Math.round(activeWeather.current.pressure_mb)} hPa</Text>
                   <Text style={styles.metricSubvalue}>
-                    {activeWeather.current.pressure_in} inHg
+                    {activeWeather.current.pressure_in.toFixed(2)} inHg
                   </Text>
                   <Text style={styles.metricFooter}>Atmospheric pressure is steady.</Text>
                 </View>
@@ -650,7 +677,7 @@ export default function HomeScreen({ navigation }: Props) {
                     <Ionicons name="eye-outline" size={16} color="rgba(255,255,255,0.7)" style={{ marginRight: 6 }} />
                     <Text style={styles.metricCardTitle}>VISIBILITY</Text>
                   </View>
-                  <Text style={styles.metricValue}>{activeWeather.current.vis_km} km</Text>
+                  <Text style={styles.metricValue}>{Math.round(activeWeather.current.vis_km)} km</Text>
                   <Text style={styles.metricFooter}>
                     {activeWeather.current.vis_km >= 10 ? "It's perfectly clear right now." : "Reduced visibility due to haze/clouds."}
                   </Text>
@@ -780,12 +807,38 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(255, 255, 255, 0.2)',
   },
-  toggleViewText: {
+  allCitiesPillText: {
     color: '#ffffff',
     fontSize: 13,
     fontWeight: '600',
-    marginLeft: 6,
+    marginLeft: 2,
   },
+  settingsIconBtn: {
+    backgroundColor: 'rgba(255, 255, 255, 0.12)',
+    padding: 8,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.2)',
+  },
+  subHeaderBackBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    backgroundColor: 'rgba(255, 255, 255, 0.12)',
+    paddingVertical: 6,
+    paddingHorizontal: 14,
+    borderRadius: 20,
+    marginTop: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.2)',
+  },
+  subHeaderBackText: {
+    color: '#ffffff',
+    fontSize: 14,
+    fontWeight: '600',
+    marginLeft: 4,
+  },
+
   errorBox: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1063,8 +1116,8 @@ const styles = StyleSheet.create({
     borderBottomColor: 'rgba(255, 255, 255, 0.06)',
   },
   dailyDay: {
-    width: 60,
-    fontSize: 15,
+    width: 80,
+    fontSize: 14,
     fontWeight: '600',
     color: '#ffffff',
   },
@@ -1191,7 +1244,7 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     padding: 8,
     alignItems: 'center',
-    marginHorizontal: 4,
+    marginHorizontal: 2,
   },
   pollutantLabel: {
     fontSize: 11,
@@ -1199,7 +1252,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   pollutantValue: {
-    fontSize: 13,
+    fontSize: 12,
     color: '#ffffff',
     fontWeight: '700',
     marginTop: 2,
