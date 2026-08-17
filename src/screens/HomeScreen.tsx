@@ -53,8 +53,6 @@ export default function HomeScreen({ navigation }: Props) {
   const [defaultZip, setDefaultZip] = useState<string | null>(null);
   const [weatherMap, setWeatherMap] = useState<Record<string, WeatherResponse>>({});
 
-  const [searchQuery, setSearchQuery] = useState('');
-  const [addCityInput, setAddCityInput] = useState('');
   const [selectedCity, setSelectedCity] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<'grid' | 'detail'>('grid');
 
@@ -62,7 +60,6 @@ export default function HomeScreen({ navigation }: Props) {
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [modalVisible, setModalVisible] = useState(false);
-  const [loadingSearch, setLoadingSearch] = useState(false);
   const [savingCity, setSavingCity] = useState(false);
 
   const hourlyScrollRef = useRef<ScrollView>(null);
@@ -123,26 +120,6 @@ export default function HomeScreen({ navigation }: Props) {
     );
   };
 
-  const handleAddCityDirect = async () => {
-    const trimmed = addCityInput.trim();
-    if (!trimmed) return;
-    setSavingCity(true);
-    try {
-      const weather = await fetchWeather(trimmed);
-      const officialName = weather.location.name;
-      await addZipCode(officialName);
-      setWeatherMap((prev) => ({ ...prev, [officialName]: weather }));
-      setAddCityInput('');
-      await loadData();
-      DeviceEventEmitter.emit('zip_changed');
-      Alert.alert('Saved', `${officialName} added to your cities!`);
-    } catch (e: any) {
-      Alert.alert('Error', e.message === 'pls update key' ? 'Please update API key in Settings' : 'Location not found.');
-    } finally {
-      setSavingCity(false);
-    }
-  };
-
   useEffect(() => {
     loadData();
     const subscription = DeviceEventEmitter.addListener('zip_changed', () => {
@@ -183,25 +160,6 @@ export default function HomeScreen({ navigation }: Props) {
       setRefreshing(false);
     }
   }, []);
-
-  const handleSearch = async () => {
-    if (!searchQuery.trim()) return;
-    setLoadingSearch(true);
-    setError(null);
-    try {
-      const query = searchQuery.trim();
-      const weather = await fetchWeather(query);
-      const cityName = weather.location.name;
-      setWeatherMap((prev: Record<string, WeatherResponse>) => ({ ...prev, [cityName]: weather }));
-      setSelectedCity(cityName);
-      setViewMode('detail');
-      setSearchQuery('');
-    } catch (e: any) {
-      Alert.alert('Search Error', e.message === 'pls update key' ? 'Please update API key in Settings' : 'Location not found.');
-    } finally {
-      setLoadingSearch(false);
-    }
-  };
 
   // Determine active city data for detail view
   const activeCityKey = selectedCity || defaultZip || (Object.keys(weatherMap).length > 0 ? Object.keys(weatherMap)[0] : 'London');
@@ -812,18 +770,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 12,
   },
-  appTitle: {
-    fontSize: 32,
-    fontWeight: '800',
-    color: '#ffffff',
-    letterSpacing: -0.5,
-  },
-  headerRightControls: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  allCitiesPillBtn: {
+  toggleViewBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: 'rgba(255, 255, 255, 0.12)',
@@ -833,96 +780,11 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(255, 255, 255, 0.2)',
   },
-  allCitiesPillText: {
+  toggleViewText: {
     color: '#ffffff',
     fontSize: 13,
     fontWeight: '600',
-    marginLeft: 2,
-  },
-  settingsIconBtn: {
-    backgroundColor: 'rgba(255, 255, 255, 0.12)',
-    padding: 8,
-    borderRadius: 20,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.2)',
-  },
-  subHeaderBackBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    alignSelf: 'flex-start',
-    backgroundColor: 'rgba(255, 255, 255, 0.12)',
-    paddingVertical: 6,
-    paddingHorizontal: 14,
-    borderRadius: 20,
-    marginTop: 12,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.2)',
-  },
-  subHeaderBackText: {
-    color: '#ffffff',
-    fontSize: 14,
-    fontWeight: '600',
-    marginLeft: 4,
-  },
-  searchBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(255, 255, 255, 0.08)',
-    borderRadius: 22,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.15)',
-  },
-  searchInput: {
-    flex: 1,
-    color: '#ffffff',
-    fontSize: 15,
-    padding: 0,
-  },
-  addCityCard: {
-    backgroundColor: 'rgba(255, 255, 255, 0.08)',
-    borderRadius: 20,
-    padding: 16,
-    marginBottom: 16,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.12)',
-  },
-  addCityTitle: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: '#ffffff',
-    marginBottom: 10,
-  },
-  addCityInputRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  addCityInput: {
-    flex: 1,
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
-    borderRadius: 12,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    fontSize: 14,
-    color: '#ffffff',
-    marginRight: 10,
-  },
-  addCityBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#00b894',
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: 12,
-  },
-  addCityBtnDisabled: {
-    opacity: 0.6,
-  },
-  addCityBtnText: {
-    color: '#ffffff',
-    fontWeight: '700',
-    fontSize: 14,
+    marginLeft: 6,
   },
   errorBox: {
     flexDirection: 'row',
