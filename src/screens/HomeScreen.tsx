@@ -64,6 +64,7 @@ export default function HomeScreen({ navigation }: Props) {
   const [modalVisible, setModalVisible] = useState(false);
 
   const [savingCity, setSavingCity] = useState(false);
+  const [addCityInput, setAddCityInput] = useState('');
 
   const hourlyScrollRef = useRef<ScrollView>(null);
 
@@ -270,6 +271,13 @@ export default function HomeScreen({ navigation }: Props) {
               <Text style={styles.toggleViewText}>
                 {viewMode === 'grid' ? 'Overview' : 'Detail'}
               </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.settingsIconBtn}
+              onPress={() => navigation?.navigate('Settings')}
+            >
+              <Ionicons name="settings-outline" size={24} color="#fff" />
             </TouchableOpacity>
           </View>
         </View>
@@ -806,6 +814,12 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     borderWidth: 1,
     borderColor: 'rgba(255, 255, 255, 0.2)',
+  },
+  toggleViewText: {
+    color: '#ffffff',
+    fontSize: 13,
+    fontWeight: '600',
+    marginLeft: 6,
   },
   allCitiesPillText: {
     color: '#ffffff',
