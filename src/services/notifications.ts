@@ -21,7 +21,7 @@ export async function createNotificationChannels(): Promise<void> {
     id: PERSISTENT_CHANNEL_ID,
     name: 'Current Weather',
     description: 'Shows current temperature',
-    importance: AndroidImportance.LOW,
+    importance: AndroidImportance.DEFAULT,
     visibility: AndroidVisibility.PUBLIC,
   });
 
