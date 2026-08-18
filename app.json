@@ -49,7 +49,8 @@
         }
       ],
       "./withForegroundService.js",
-      "./withCustomSounds.js"
+      "./withCustomSounds.js",
+      "@react-native-community/datetimepicker"
     ]
   }
 }

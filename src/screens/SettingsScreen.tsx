@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, ScrollView, Switch, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import DateTimePicker from '@react-native-community/datetimepicker';
 import Constants from 'expo-constants';
 import { getApiKey, setApiKey, removeApiKey } from '../services/weatherApi';
 import { getAlarmSettings, setAlarmSettings, AlarmType, AlarmSound, AlarmSettings, AlarmItem } from '../services/alarmApi';
@@ -30,6 +31,7 @@ export default function SettingsScreen() {
   const [alarmSound, setAlarmSound] = useState<AlarmSound>('default');
   const [useSystemAlarm, setUseSystemAlarm] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [showTimePicker, setShowTimePicker] = useState(false);
 
   useEffect(() => {
     loadSettings();
@@ -390,41 +392,73 @@ export default function SettingsScreen() {
           {alarmType === 'custom' && (
             <View style={styles.widgetContainer}>
               <Text style={styles.label}>Custom Time</Text>
-              <View style={styles.timePickerRow}>
-                <TextInput
-                  style={[styles.input, styles.timeInput]}
-                  placeholder="08"
-                  placeholderTextColor="#888"
-                  value={hour}
-                  onChangeText={setHour}
-                  keyboardType="number-pad"
-                  maxLength={2}
-                />
-                <Text style={styles.timeColon}>:</Text>
-                <TextInput
-                  style={[styles.input, styles.timeInput]}
-                  placeholder="00"
-                  placeholderTextColor="#888"
-                  value={minute}
-                  onChangeText={setMinute}
-                  keyboardType="number-pad"
-                  maxLength={2}
-                />
-                <View style={styles.ampmToggleRow}>
+              {Platform.OS === 'android' ? (
+                <View style={styles.timePickerRow}>
                   <TouchableOpacity
-                    style={[styles.ampmBtn, ampm === 'AM' && styles.ampmBtnSelected]}
-                    onPress={() => setAmpm('AM')}
+                    style={styles.timeDisplayBtn}
+                    onPress={() => setShowTimePicker(true)}
                   >
-                    <Text style={[styles.ampmBtnText, ampm === 'AM' && styles.ampmBtnTextSelected]}>AM</Text>
+                    <Text style={styles.timeDisplayText}>
+                      {`${hour.padStart(2, '0')}:${minute.padStart(2, '0')} ${ampm}`}
+                    </Text>
                   </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[styles.ampmBtn, ampm === 'PM' && styles.ampmBtnSelected]}
-                    onPress={() => setAmpm('PM')}
-                  >
-                    <Text style={[styles.ampmBtnText, ampm === 'PM' && styles.ampmBtnTextSelected]}>PM</Text>
-                  </TouchableOpacity>
+                  {showTimePicker && (
+                    <DateTimePicker
+                      value={(() => {
+                        const d = new Date();
+                        let h = parseInt(hour, 10);
+                        if (ampm === 'PM' && h < 12) h += 12;
+                        if (ampm === 'AM' && h === 12) h = 0;
+                        d.setHours(h);
+                        d.setMinutes(parseInt(minute, 10));
+                        return d;
+                      })()}
+                      mode="time"
+                      is24Hour={false}
+                      display="default"
+                      onChange={(event, selectedDate) => {
+                        setShowTimePicker(false);
+                        if (selectedDate) {
+                          let h = selectedDate.getHours();
+                          const m = selectedDate.getMinutes();
+                          const newAmpm = h >= 12 ? 'PM' : 'AM';
+                          if (h > 12) h -= 12;
+                          if (h === 0) h = 12;
+                          setHour(h.toString());
+                          setMinute(m.toString().padStart(2, '0'));
+                          setAmpm(newAmpm);
+                        }
+                      }}
+                    />
+                  )}
                 </View>
-              </View>
+              ) : (
+                <DateTimePicker
+                  value={(() => {
+                    const d = new Date();
+                    let h = parseInt(hour, 10);
+                    if (ampm === 'PM' && h < 12) h += 12;
+                    if (ampm === 'AM' && h === 12) h = 0;
+                    d.setHours(h);
+                    d.setMinutes(parseInt(minute, 10));
+                    return d;
+                  })()}
+                  mode="time"
+                  display="inline"
+                  onChange={(event, selectedDate) => {
+                    if (selectedDate) {
+                      let h = selectedDate.getHours();
+                      const m = selectedDate.getMinutes();
+                      const newAmpm = h >= 12 ? 'PM' : 'AM';
+                      if (h > 12) h -= 12;
+                      if (h === 0) h = 12;
+                      setHour(h.toString());
+                      setMinute(m.toString().padStart(2, '0'));
+                      setAmpm(newAmpm);
+                    }
+                  }}
+                />
+              )}
             </View>
           )}
 
@@ -665,40 +699,19 @@ const styles = StyleSheet.create({
   timePickerRow: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 10,
   },
-  timeInput: {
-    width: 60,
-    textAlign: 'center',
-    marginBottom: 0,
+  timeDisplayBtn: {
+    backgroundColor: '#0984e3',
+    paddingVertical: 12,
+    paddingHorizontal: 24,
+    borderRadius: 8,
   },
-  timeColon: {
+  timeDisplayText: {
+    color: '#fff',
     fontSize: 24,
     fontWeight: 'bold',
-    marginHorizontal: 10,
-    color: '#333',
-  },
-  ampmToggleRow: {
-    flexDirection: 'row',
-    marginLeft: 20,
-    borderWidth: 1,
-    borderColor: '#0984e3',
-    borderRadius: 8,
-    overflow: 'hidden',
-  },
-  ampmBtn: {
-    paddingVertical: 10,
-    paddingHorizontal: 15,
-    backgroundColor: '#fff',
-  },
-  ampmBtnSelected: {
-    backgroundColor: '#0984e3',
-  },
-  ampmBtnText: {
-    color: '#0984e3',
-    fontWeight: 'bold',
-  },
-  ampmBtnTextSelected: {
-    color: '#fff',
   },
   offsetPickerRow: {
     flexDirection: 'row',
