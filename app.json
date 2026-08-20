@@ -20,7 +20,6 @@
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
-      "edgeToEdgeEnabled": false,
       "predictiveBackGestureEnabled": false,
       "package": "com.weatherapp.alerts",
       "permissions": [
@@ -44,7 +43,7 @@
             "compileSdkVersion": 35,
             "targetSdkVersion": 34,
             "minSdkVersion": 24,
-            "kotlinVersion": "2.0.21"
+            "kotlinVersion": "2.1.20"
           }
         }
       ],
