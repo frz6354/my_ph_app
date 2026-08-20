@@ -1,3 +1,4 @@
+import { updateWeatherWidget } from '../widgets/updateWidget';
 import notifee, { AndroidNotificationSettings, AndroidForegroundServiceType, TriggerType, TimeUnit, AlarmType, TimestampTrigger } from '@notifee/react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import BackgroundFetch from 'react-native-background-fetch';
@@ -154,6 +155,14 @@ export async function runWeatherCheck(): Promise<Record<string, WeatherResponse>
     }
 
     await saveWeatherMap(weatherMap);
+    if (defaultWeather) {
+      updateWeatherWidget(
+        defaultWeather.current.temp_c,
+        defaultWeather.current.condition.text,
+        defaultWeather.location.name
+      );
+    }
+
 
     // Persistent notification logic
     if (defaultWeather && alarmSettings.isPersistent) {

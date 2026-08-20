@@ -50,7 +50,29 @@
       ],
       "./withForegroundService.js",
       "./withCustomSounds.js",
-      "@react-native-community/datetimepicker"
+      "@react-native-community/datetimepicker",
+      [
+        "expo-widgets",
+        {
+          "bundleIdentifier": "com.weatherapp.alerts.widgets",
+          "groupIdentifier": "group.com.weatherapp.alerts",
+          "widgets": [
+            {
+              "name": "WeatherWidget",
+              "displayName": "Weather",
+              "description": "Shows current weather highlights",
+              "supportedFamilies": [
+                "systemSmall",
+                "systemMedium",
+                "systemLarge",
+                "accessoryCircular",
+                "accessoryRectangular",
+                "accessoryInline"
+              ]
+            }
+          ]
+        }
+      ]
     ]
   }
 }
