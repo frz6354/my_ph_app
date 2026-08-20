@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { updateWeatherWidget } from '../widgets/updateWidget';
 import {
   View,
   Text,
@@ -24,6 +25,7 @@ import {
   addZipCode,
   removeZipCode,
   getDefaultZipCode,
+  setDefaultZipCode,
   getWeatherMap,
   runWeatherCheck,
 } from '../tasks/weatherTask';
@@ -114,6 +116,20 @@ export default function HomeScreen({ navigation }: Props) {
     setZipCodes(codes);
     setDefaultZip(defZip);
     setWeatherMap(wMap);
+    if (defZip && wMap[defZip]) {
+      updateWeatherWidget(
+        wMap[defZip].current.temp_c,
+        wMap[defZip].current.condition.text,
+        wMap[defZip].location.name
+      );
+    } else if (cities.length > 0 && wMap[cities[0]]) {
+      updateWeatherWidget(
+        wMap[cities[0]].current.temp_c,
+        wMap[cities[0]].current.condition.text,
+        wMap[cities[0]].location.name
+      );
+    }
+
     if (Object.keys(wMap).length > 0) {
       setLastUpdated(new Date().toLocaleTimeString());
     }
@@ -130,7 +146,22 @@ export default function HomeScreen({ navigation }: Props) {
     DeviceEventEmitter.emit('zip_changed');
   };
 
+
+  const handleSetDefault = async (city: string) => {
+    await setDefaultZipCode(city);
+    setDefaultZip(city);
+    if (weatherMap[city]) {
+      updateWeatherWidget(
+        weatherMap[city].current.temp_c,
+        weatherMap[city].current.condition.text,
+        weatherMap[city].location.name
+      );
+    }
+    Alert.alert('Default Updated', `${city} is now your default city.`);
+  };
+
   const handleDeleteCity = (cityKey: string) => {
+
     Alert.alert(
       'Remove City',
       `Are you sure you want to remove ${cityKey} from saved cities?`,
@@ -323,7 +354,25 @@ export default function HomeScreen({ navigation }: Props) {
                         </Text>
                       </View>
                       <View style={styles.cardActionRow}>
+
+                        {defaultZip !== cityKey && (
+                          <TouchableOpacity
+                            onPress={(e) => {
+                              e.stopPropagation();
+                              handleSetDefault(cityKey);
+                            }}
+                            style={styles.actionBtnIcon}
+                          >
+                            <Ionicons name="star-outline" size={14} color="rgba(255,255,255,0.8)" />
+                          </TouchableOpacity>
+                        )}
+                        {defaultZip === cityKey && (
+                          <View style={styles.actionBtnIcon}>
+                            <Ionicons name="star" size={14} color="#ffd700" />
+                          </View>
+                        )}
                         {index > 0 && (
+
                           <TouchableOpacity
                             onPress={(e) => {
                               e.stopPropagation();
